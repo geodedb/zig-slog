@@ -1,0 +1,12 @@
+# Gitleaks configuration for slog library
+# Exclude example files which contain intentional demo credentials
+# (secret_redaction.zig demonstrates the library's secret masking feature)
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+    '''examples/.*''',
+    '''tests/.*''',
+]
