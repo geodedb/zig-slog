@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-handler fan-out
 - Log sampling and rate limiting
 
-## [0.1.0] - Initial Release
+## [0.1.0] - 2026-01-24
 
 ### Added
 - **Core Logging Framework**
@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Removed 'zig' prefix from library name (now just 'slog')
 - Refactored to use JSON library for serialization
+- Updated json dependency to use GitLab archive URL
 
 ### Fixed
 - Correct Zig download URL format for 0.15.x compatibility
@@ -82,5 +83,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Issue templates for bug reports, features, and questions
 - Merge request template
 
-[Unreleased]: https://gitlab.com/devnw/zig/slog/-/compare/main...HEAD
-[0.1.0]: https://gitlab.com/devnw/zig/slog/-/commits/main
+[Unreleased]: https://gitlab.com/devnw/zig/slog/-/compare/v0.1.0...HEAD
+[0.1.0]: https://gitlab.com/devnw/zig/slog/-/releases/v0.1.0

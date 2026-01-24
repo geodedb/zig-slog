@@ -1,7 +1,7 @@
 .{
     .name = .slog,
     .version = "0.1.0",
-    .fingerprint = 0xd047cce63f6daeb1,
+    .fingerprint = 0x28b061b90f84a949,
     .minimum_zig_version = "0.15.0",
     .paths = .{
         "build.zig",
@@ -13,7 +13,8 @@
     },
     .dependencies = .{
         .json = .{
-            .path = "../json",
+            .url = "https://gitlab.com/devnw/zig/json/-/archive/v0.1.0/json-v0.1.0.tar.gz",
+            .hash = "json-0.1.0-tOue4WZ_CwDmY9dvdVfuFN_LcZZs6XcHmnQqkvsqdNCM",
         },
     },
 }
