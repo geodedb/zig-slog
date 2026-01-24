@@ -2,6 +2,14 @@
 
 A high-performance structured logging library for Zig, inspired by Go's slog.
 
+## Status
+
+| Aspect | Info |
+|--------|------|
+| API Stability | Beta |
+| Zig Version | 0.14.0+ |
+| Platforms | Linux, macOS, Windows |
+
 ## Features
 
 - **Multiple Output Handlers**
