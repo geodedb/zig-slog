@@ -7,6 +7,13 @@
 //! Supports Prometheus-style text export.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+// Use usize for atomic counters to ensure native atomic support on all architectures.
+// On 32-bit platforms (ARM32), 64-bit atomics aren't natively supported, so we use
+// usize which maps to the native pointer width (32-bit or 64-bit).
+const CounterType = usize;
+const AtomicCounter = std.atomic.Value(CounterType);
 
 /// Global metrics instance.
 pub var global: Metrics = .{};
@@ -19,19 +26,19 @@ pub fn reset() void {
 /// Metrics counters for logging operations.
 pub const Metrics = struct {
     /// Total number of log records emitted.
-    logs_emitted_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    logs_emitted_total: AtomicCounter = AtomicCounter.init(0),
     /// Total number of log records dropped (e.g., queue full).
-    logs_dropped_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    logs_dropped_total: AtomicCounter = AtomicCounter.init(0),
     /// Total number of handler errors.
-    handler_errors_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    handler_errors_total: AtomicCounter = AtomicCounter.init(0),
     /// Total bytes written.
-    bytes_written_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    bytes_written_total: AtomicCounter = AtomicCounter.init(0),
     /// Records currently in async queue.
-    queue_size: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    queue_size: AtomicCounter = AtomicCounter.init(0),
     /// Number of file rotations.
-    rotations_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    rotations_total: AtomicCounter = AtomicCounter.init(0),
     /// Number of network reconnections.
-    reconnections_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    reconnections_total: AtomicCounter = AtomicCounter.init(0),
 
     /// Increment logs emitted counter.
     pub fn incEmitted(self: *Metrics) void {
@@ -39,7 +46,7 @@ pub const Metrics = struct {
     }
 
     /// Increment logs dropped counter.
-    pub fn incDropped(self: *Metrics, count: u64) void {
+    pub fn incDropped(self: *Metrics, count: CounterType) void {
         _ = self.logs_dropped_total.fetchAdd(count, .monotonic);
     }
 
@@ -49,12 +56,12 @@ pub const Metrics = struct {
     }
 
     /// Add bytes written.
-    pub fn addBytesWritten(self: *Metrics, bytes: u64) void {
+    pub fn addBytesWritten(self: *Metrics, bytes: CounterType) void {
         _ = self.bytes_written_total.fetchAdd(bytes, .monotonic);
     }
 
     /// Set queue size.
-    pub fn setQueueSize(self: *Metrics, size: u64) void {
+    pub fn setQueueSize(self: *Metrics, size: CounterType) void {
         self.queue_size.store(size, .monotonic);
     }
 
@@ -126,13 +133,13 @@ pub const Metrics = struct {
 
 /// Immutable snapshot of metrics values.
 pub const MetricsSnapshot = struct {
-    logs_emitted_total: u64,
-    logs_dropped_total: u64,
-    handler_errors_total: u64,
-    bytes_written_total: u64,
-    queue_size: u64,
-    rotations_total: u64,
-    reconnections_total: u64,
+    logs_emitted_total: CounterType,
+    logs_dropped_total: CounterType,
+    handler_errors_total: CounterType,
+    bytes_written_total: CounterType,
+    queue_size: CounterType,
+    rotations_total: CounterType,
+    reconnections_total: CounterType,
 };
 
 test "Metrics basic operations" {
@@ -144,9 +151,9 @@ test "Metrics basic operations" {
     m.incErrors();
 
     const snap = m.snapshot();
-    try std.testing.expectEqual(@as(u64, 2), snap.logs_emitted_total);
-    try std.testing.expectEqual(@as(u64, 3), snap.logs_dropped_total);
-    try std.testing.expectEqual(@as(u64, 1), snap.handler_errors_total);
+    try std.testing.expectEqual(@as(CounterType, 2), snap.logs_emitted_total);
+    try std.testing.expectEqual(@as(CounterType, 3), snap.logs_dropped_total);
+    try std.testing.expectEqual(@as(CounterType, 1), snap.handler_errors_total);
 }
 
 test "Metrics.renderPrometheus" {
