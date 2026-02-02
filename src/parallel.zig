@@ -6,6 +6,50 @@
 //! Provides high-performance parallel implementations for logging
 //! operations including batch record formatting, multi-handler dispatch,
 //! and parallel sink writes.
+//!
+//! ## Overview
+//!
+//! This module enables parallel processing of logging operations using
+//! the spice thread pool. Ideal for high-throughput logging systems
+//! that need to format and dispatch many log records simultaneously.
+//!
+//! ## Build Configuration
+//!
+//! Enable: `-Dspice=true` (default)
+//! Disable: `-Dspice=false`
+//!
+//! ## Usage Example
+//!
+//! ```zig
+//! const parallel = @import("parallel.zig");
+//!
+//! // Format multiple log records in parallel
+//! var inputs: [32]parallel.RecordInput = undefined;
+//! var buffers: [32][]u8 = undefined;
+//! var results: [32]parallel.FormattedRecord = undefined;
+//!
+//! // Initialize buffers...
+//! for (&buffers) |*buf| {
+//!     buf.* = allocator.alloc(u8, 1024) catch unreachable;
+//! }
+//!
+//! parallel.parallelRecordFormat(&inputs, &buffers, &results, myFormatter);
+//!
+//! // Dispatch records to multiple handlers in parallel
+//! var handlers: [4]parallel.Handler = undefined;
+//! var dispatch_results: [4]parallel.DispatchResult = undefined;
+//!
+//! parallel.parallelHandlerDispatch(&handlers, &dispatch_results, record);
+//! ```
+//!
+//! ## Performance Thresholds
+//!
+//! | Operation        | Threshold   | Sequential Below |
+//! |------------------|-------------|------------------|
+//! | Record Format    | 8 records   | Yes              |
+//! | Handler Dispatch | 4 handlers  | Yes              |
+//! | Sink Write       | 4 sinks     | Yes              |
+//! | Batch Flush      | 8 batches   | Yes              |
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -506,6 +550,212 @@ test "parallel handler dispatch" {
     }
 
     parallelHandlerDispatch(&handlers, "test record data", &results);
+
+    for (results) |result| {
+        try std.testing.expect(result.success);
+    }
+}
+
+test "parallel handler dispatch - empty record" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    const TestHandler = struct {
+        fn dispatch(ptr: *anyopaque, record_data: []const u8) DispatchResult {
+            _ = ptr;
+            return .{
+                .success = record_data.len > 0,
+                .handler_idx = 0,
+                .error_code = if (record_data.len == 0) @as(?i32, -1) else null,
+            };
+        }
+    };
+
+    var handlers: [4]HandlerTarget = undefined;
+    var results: [4]DispatchResult = undefined;
+    var dummy: u8 = 0;
+
+    for (&handlers) |*h| {
+        h.* = .{
+            .handler_ptr = @ptrCast(&dummy),
+            .handler_fn = TestHandler.dispatch,
+        };
+    }
+
+    parallelHandlerDispatch(&handlers, "", &results); // Empty
+
+    for (results) |result| {
+        try std.testing.expect(!result.success);
+    }
+}
+
+test "parallel sink write" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    const testWriter = struct {
+        fn write(sink_ptr: *anyopaque, data: []const u8, flush: bool) WriteResult {
+            _ = sink_ptr;
+            _ = flush;
+            return .{
+                .success = data.len > 0,
+                .bytes_written = data.len,
+                .error_code = null,
+            };
+        }
+    }.write;
+
+    var inputs: [8]WriteInput = undefined;
+    var results: [8]WriteResult = undefined;
+    var dummy: u8 = 0;
+
+    for (&inputs) |*input| {
+        input.* = .{
+            .sink_ptr = @ptrCast(&dummy),
+            .data = "log message here",
+            .flush = false,
+        };
+    }
+
+    parallelSinkWrite(&inputs, &results, testWriter);
+
+    for (results) |result| {
+        try std.testing.expect(result.success);
+        try std.testing.expect(result.bytes_written > 0);
+    }
+}
+
+test "parallel sink write - with flush" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    const testWriter = struct {
+        fn write(sink_ptr: *anyopaque, data: []const u8, flush: bool) WriteResult {
+            _ = sink_ptr;
+            return .{
+                .success = true,
+                .bytes_written = data.len,
+                .error_code = if (flush) null else null, // flush handled
+            };
+        }
+    }.write;
+
+    var inputs: [4]WriteInput = undefined;
+    var results: [4]WriteResult = undefined;
+    var dummy: u8 = 0;
+
+    for (&inputs) |*input| {
+        input.* = .{
+            .sink_ptr = @ptrCast(&dummy),
+            .data = "message",
+            .flush = true,
+        };
+    }
+
+    parallelSinkWrite(&inputs, &results, testWriter);
+
+    for (results) |result| {
+        try std.testing.expect(result.success);
+    }
+}
+
+test "parallel batch flush" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    const testFlusher = struct {
+        fn flush(sink_ptr: *anyopaque, timeout_ms: u32) FlushResult {
+            _ = sink_ptr;
+            return .{
+                .success = timeout_ms > 0,
+                .records_flushed = 10,
+                .timed_out = false,
+            };
+        }
+    }.flush;
+
+    var targets: [4]FlushTarget = undefined;
+    var results: [4]FlushResult = undefined;
+    var dummy: u8 = 0;
+
+    for (&targets) |*target| {
+        target.* = .{
+            .sink_ptr = @ptrCast(&dummy),
+            .timeout_ms = 5000,
+        };
+    }
+
+    parallelBatchFlush(&targets, &results, testFlusher);
+
+    for (results) |result| {
+        try std.testing.expect(result.success);
+        try std.testing.expect(!result.timed_out);
+        try std.testing.expectEqual(@as(usize, 10), result.records_flushed);
+    }
+}
+
+test "parallel batch flush - timeout" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    const testFlusher = struct {
+        fn flush(sink_ptr: *anyopaque, timeout_ms: u32) FlushResult {
+            _ = sink_ptr;
+            return .{
+                .success = timeout_ms > 0,
+                .records_flushed = 0,
+                .timed_out = timeout_ms == 0,
+            };
+        }
+    }.flush;
+
+    var targets: [4]FlushTarget = undefined;
+    var results: [4]FlushResult = undefined;
+    var dummy: u8 = 0;
+
+    for (&targets) |*target| {
+        target.* = .{
+            .sink_ptr = @ptrCast(&dummy),
+            .timeout_ms = 0, // Zero timeout
+        };
+    }
+
+    parallelBatchFlush(&targets, &results, testFlusher);
+
+    for (results) |result| {
+        try std.testing.expect(!result.success);
+        try std.testing.expect(result.timed_out);
+    }
+}
+
+test "parallel record format - below threshold" {
+    const testFormatter = struct {
+        fn format(input: RecordInput, buffer: []u8) FormattedRecord {
+            const len = @min(input.message.len, buffer.len);
+            @memcpy(buffer[0..len], input.message[0..len]);
+            return .{
+                .data = buffer,
+                .len = len,
+                .success = true,
+            };
+        }
+    }.format;
+
+    var inputs: [4]RecordInput = undefined; // Below 8 threshold
+    var buffers: [4][256]u8 = undefined;
+    var buffer_slices: [4][]u8 = undefined;
+    var results: [4]FormattedRecord = undefined;
+
+    for (&inputs) |*input| {
+        input.* = .{
+            .time_utc_us = 0,
+            .level = 2,
+            .message = "test",
+            .logger = "test",
+            .attrs_json = "{}",
+        };
+    }
+
+    for (&buffer_slices, &buffers) |*slice, *buf| {
+        slice.* = buf;
+    }
+
+    parallelRecordFormat(&inputs, &buffer_slices, &results, testFormatter);
 
     for (results) |result| {
         try std.testing.expect(result.success);
