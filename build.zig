@@ -11,9 +11,22 @@ pub fn build(b: *std.Build) void {
     const feature_journald = b.option(bool, "feature_journald", "Enable journald support (requires libsystemd)") orelse false;
     const feature_windows_eventlog = b.option(bool, "feature_windows_eventlog", "Enable Windows Event Log support") orelse false;
 
+    // Spice parallelism option
+    const enable_spice = b.option(bool, "spice", "Enable spice-based parallelism") orelse true;
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "feature_journald", feature_journald);
     build_options.addOption(bool, "feature_windows_eventlog", feature_windows_eventlog);
+    build_options.addOption(bool, "enable_spice", enable_spice);
+
+    // Get spice dependency if enabled
+    const spice_mod: ?*std.Build.Module = if (enable_spice) blk: {
+        const spice_dep = b.dependency("spice", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        break :blk spice_dep.module("spice");
+    } else null;
 
     // Get dependencies
     const json_dep = b.dependency("json", .{
@@ -22,6 +35,19 @@ pub fn build(b: *std.Build) void {
     });
     const json_mod = json_dep.module("json");
 
+    // Parallel module
+    const parallel_mod = b.addModule("parallel", .{
+        .root_source_file = b.path("src/parallel.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = build_options.createModule() },
+        },
+    });
+    if (spice_mod) |sm| {
+        parallel_mod.addImport("spice", sm);
+    }
+
     // Main module
     const slogz_mod = b.addModule("slogz", .{
         .root_source_file = b.path("src/slogz.zig"),
@@ -29,6 +55,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "json", .module = json_mod },
+            .{ .name = "parallel", .module = parallel_mod },
         },
     });
     slogz_mod.addOptions("build_options", build_options);

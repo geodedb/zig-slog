@@ -16,5 +16,9 @@
             .url = "https://gitlab.com/devnw/zig/json/-/archive/v0.1.0/json-v0.1.0.tar.gz",
             .hash = "json-0.1.0-tOue4WZ_CwDmY9dvdVfuFN_LcZZs6XcHmnQqkvsqdNCM",
         },
+        .spice = .{
+            .url = "https://gitlab.com/devnw/zig/spice/-/archive/main/spice-main.tar.gz",
+            .hash = "spice-0.0.0-HnDb57y0AABlp7AaQKAkMShWpww-Tl_8QM7T-1Lx3auu",
+        },
     },
 }
