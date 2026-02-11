@@ -134,7 +134,16 @@ fn writeValue(writer: anytype, value: Value) !void {
                 try writer.print("{x:0>2}", .{byte});
             }
         },
-        .err => |e| try writer.writeAll(@errorName(e)),
+        .err => |e| {
+            // Eagerly resolve error name; guard against corrupt error values
+            // that could cause @errorName to access an invalid table index.
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                try writer.writeAll("error(0)");
+            } else {
+                try writer.writeAll(@errorName(e));
+            }
+        },
         .secret => try writer.writeAll(redact.REDACTED),
         .marshaler => try writer.writeAll("<marshaler>"),
     }
@@ -242,4 +251,32 @@ test "TextHandler secret redaction" {
 
     try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "super_secret") == null);
+}
+
+test "TextHandler error attribute" {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "error test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.err("err", error.OutOfMemory),
+            Attr.string("ctx", "test"),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "err=OutOfMemory") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "ctx=test") != null);
 }
