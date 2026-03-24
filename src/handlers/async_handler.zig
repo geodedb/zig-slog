@@ -8,6 +8,24 @@
 //! - Drop-oldest policy with metrics tracking
 //! - Optional blocking mode with timeout
 //! - Background thread for delivery
+//!
+//! ## Usage
+//!
+//! The Context must be initialized and started in two steps to avoid
+//! dangling pointers. `init()` creates the context by value, and `start()`
+//! spawns the background worker thread using the caller's stable pointer:
+//!
+//! ```zig
+//! var ctx = try Context.init(allocator, options);
+//! try ctx.start(); // spawns worker thread using &ctx (stable address)
+//! defer ctx.deinit();
+//! ```
+//!
+//! ## Attribute preservation
+//!
+//! All record attributes are preserved through the async queue. Values are
+//! serialized to their string representation at enqueue time. See
+//! `src/internal/queue.zig` for serialization details.
 
 const std = @import("std");
 const Level = @import("../level.zig").Level;
@@ -18,6 +36,7 @@ const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
 const BoundedQueue = @import("../internal/queue.zig").BoundedQueue;
 const QueuedRecord = @import("../internal/queue.zig").QueuedRecord;
+const MAX_STORED_ATTRS = @import("../internal/queue.zig").MAX_STORED_ATTRS;
 const metrics = @import("../metrics/metrics.zig");
 
 /// Async handler options.
@@ -38,11 +57,11 @@ pub const Context = struct {
     level: Level,
     running: std.atomic.Value(bool),
     thread: ?std.Thread,
-    mutex: std.Thread.Mutex,
-    dropped_count: std.atomic.Value(u64),
 
+    /// Initialize the async handler context. Does NOT start the background
+    /// worker thread. Call `start()` after the Context has a stable address.
     pub fn init(allocator: std.mem.Allocator, options: AsyncOptions) !Context {
-        var ctx = Context{
+        return Context{
             .allocator = allocator,
             .inner = options.inner,
             .queue = try BoundedQueue(QueuedRecord).init(allocator, options.queue_size),
@@ -51,14 +70,14 @@ pub const Context = struct {
             .level = .info,
             .running = std.atomic.Value(bool).init(true),
             .thread = null,
-            .mutex = .{},
-            .dropped_count = std.atomic.Value(u64).init(0),
         };
+    }
 
-        // Start background thread
-        ctx.thread = std.Thread.spawn(.{}, workerThread, .{&ctx}) catch null;
-
-        return ctx;
+    /// Start the background worker thread. Must be called after the Context
+    /// has been placed at its final address (e.g., on the caller's stack frame
+    /// or heap). Calling `start()` on a moved Context would be undefined behavior.
+    pub fn start(self: *Context) !void {
+        self.thread = try std.Thread.spawn(.{}, workerThread, .{self});
     }
 
     pub fn deinit(self: *Context) void {
@@ -81,6 +100,10 @@ pub const Context = struct {
             // Try to get a record with timeout
             if (ctx.queue.popTimeout(100)) |qr| {
                 if (qr.valid) {
+                    // Build attrs from stored data
+                    var attr_buf: [MAX_STORED_ATTRS]Attr = undefined;
+                    const attrs = qr.attrs(&attr_buf);
+
                     // Reconstruct record and deliver
                     const rec = Record{
                         .time_utc_us = qr.time_utc_us,
@@ -90,7 +113,7 @@ pub const Context = struct {
                         .logger = qr.logger(),
                         .source_file = qr.sourceFile(),
                         .source_line = qr.source_line,
-                        .attrs = &.{}, // Simplified
+                        .attrs = attrs,
                     };
 
                     ctx.inner.handle(&rec) catch {
@@ -103,6 +126,9 @@ pub const Context = struct {
         // Drain remaining records
         while (ctx.queue.tryPop()) |qr| {
             if (qr.valid) {
+                var attr_buf: [MAX_STORED_ATTRS]Attr = undefined;
+                const attrs = qr.attrs(&attr_buf);
+
                 const rec = Record{
                     .time_utc_us = qr.time_utc_us,
                     .level = @enumFromInt(qr.level_int),
@@ -111,7 +137,7 @@ pub const Context = struct {
                     .logger = qr.logger(),
                     .source_file = qr.sourceFile(),
                     .source_line = qr.source_line,
-                    .attrs = &.{},
+                    .attrs = attrs,
                 };
 
                 ctx.inner.handle(&rec) catch {
@@ -121,27 +147,28 @@ pub const Context = struct {
         }
     }
 
+    /// Enqueue a record for async delivery.
+    /// Uses the queue's internal mutex for thread safety -- no external
+    /// locking is needed. Drop tracking uses the queue's own dropped counter.
     pub fn enqueue(self: *Context, rec: *const Record) !void {
         const qr = QueuedRecord.fromRecord(rec);
 
         if (self.drop_oldest) {
-            // Check if we'll drop
-            self.mutex.lock();
-            const was_full = self.queue.len() >= self.queue.buffer.len;
-            self.mutex.unlock();
+            // Snapshot the dropped count before pushing so we can detect
+            // if the queue itself dropped an item during this push.
+            const before = self.queue.droppedCount();
 
             self.queue.pushDropOldest(qr);
 
-            if (was_full) {
-                _ = self.dropped_count.fetchAdd(1, .monotonic);
-                metrics.global.incDropped(1);
+            const after = self.queue.droppedCount();
+            if (after > before) {
+                metrics.global.incDropped(after - before);
             }
         } else {
             // Blocking mode
             self.queue.pushBlocking(qr, self.block_timeout_ms) catch |err| {
                 switch (err) {
                     error.Timeout, error.QueueFull => {
-                        _ = self.dropped_count.fetchAdd(1, .monotonic);
                         metrics.global.incDropped(1);
                         return error.BufferFull;
                     },
@@ -153,8 +180,9 @@ pub const Context = struct {
         metrics.global.setQueueSize(self.queue.len());
     }
 
-    pub fn droppedCount(self: *Context) u64 {
-        return self.dropped_count.load(.monotonic);
+    /// Returns the total number of records dropped by the queue.
+    pub fn droppedCount(self: *Context) usize {
+        return self.queue.droppedCount();
     }
 };
 
@@ -190,17 +218,17 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     ctx.level = level;
 }
 
+/// Flush waits for the queue to drain using the queue's empty condition
+/// variable, then flushes the inner handler.
 fn flush(ctx_ptr: *anyopaque, timeout_ms: u32) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    // Wait for queue to drain
-    const start = std.time.milliTimestamp();
-    while (ctx.queue.len() > 0) {
-        if (timeout_ms > 0) {
-            const elapsed = std.time.milliTimestamp() - start;
-            if (elapsed >= timeout_ms) return error.Timeout;
-        }
-        std.time.sleep(1 * std.time.ns_per_ms);
+    // Wait for queue to drain using the CV-based waitEmpty.
+    // If timeout_ms is 0, we still try a brief wait to allow in-flight items
+    // to be processed.
+    const wait_ms = if (timeout_ms == 0) 5000 else timeout_ms;
+    if (!ctx.queue.waitEmpty(wait_ms)) {
+        if (timeout_ms > 0) return error.Timeout;
     }
 
     // Flush inner handler
@@ -230,7 +258,7 @@ pub fn init(ctx: *Context) Handler {
 }
 
 /// Get dropped count from async handler.
-pub fn getDroppedCount(handler: Handler) u64 {
+pub fn getDroppedCount(handler: Handler) usize {
     const ctx: *Context = @ptrCast(@alignCast(handler.ctx));
     return ctx.droppedCount();
 }
@@ -250,6 +278,7 @@ test "AsyncHandler basic" {
         .queue_size = 16,
         .drop_oldest = true,
     });
+    try async_ctx.start();
     defer async_ctx.deinit();
 
     const handler = init(&async_ctx);
@@ -270,4 +299,139 @@ test "AsyncHandler basic" {
 
     const output = fbs.getWritten();
     try std.testing.expect(output.len > 0);
+}
+
+test "AsyncHandler preserves attributes through queue" {
+    const allocator = std.testing.allocator;
+
+    var buf: [8192]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    const text_handler_mod = @import("text_handler.zig");
+    var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
+    const inner = text_handler_mod.init(&text_ctx);
+
+    var async_ctx = try Context.init(allocator, .{
+        .inner = inner,
+        .queue_size = 16,
+        .drop_oldest = true,
+    });
+    try async_ctx.start();
+    defer async_ctx.deinit();
+
+    const handler = init(&async_ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "attrs test",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("host", "localhost"),
+            Attr.int("port", 8080),
+            Attr.boolean("tls", true),
+        },
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(5000);
+
+    const output = fbs.getWritten();
+    // Verify all attributes appear in the output
+    try std.testing.expect(std.mem.indexOf(u8, output, "host=localhost") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "port=8080") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "tls=true") != null);
+}
+
+test "AsyncHandler preserves i64 values through queue" {
+    const allocator = std.testing.allocator;
+
+    var buf: [8192]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    const text_handler_mod = @import("text_handler.zig");
+    var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
+    const inner = text_handler_mod.init(&text_ctx);
+
+    var async_ctx = try Context.init(allocator, .{
+        .inner = inner,
+        .queue_size = 16,
+        .drop_oldest = true,
+    });
+    try async_ctx.start();
+    defer async_ctx.deinit();
+
+    const handler = init(&async_ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "i64 test",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.int("count", 42),
+            Attr.int("negative", -100),
+            Attr.int("zero", 0),
+        },
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(5000);
+
+    const output = fbs.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "count=42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "negative=-100") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "zero=0") != null);
+}
+
+test "AsyncHandler redacts secrets in async output" {
+    const allocator = std.testing.allocator;
+
+    var buf: [8192]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    const text_handler_mod = @import("text_handler.zig");
+    var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
+    const inner = text_handler_mod.init(&text_ctx);
+
+    var async_ctx = try Context.init(allocator, .{
+        .inner = inner,
+        .queue_size = 16,
+        .drop_oldest = true,
+    });
+    try async_ctx.start();
+    defer async_ctx.deinit();
+
+    const handler = init(&async_ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "secret test",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.secret("api_key", "super_secret_value"),
+            Attr.string("user", "admin"),
+        },
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(5000);
+
+    const output = fbs.getWritten();
+    // The secret should be redacted, not present in output
+    try std.testing.expect(std.mem.indexOf(u8, output, "super_secret_value") == null);
+    // The key should still appear with the redacted marker
+    try std.testing.expect(std.mem.indexOf(u8, output, "api_key=[REDACTED]") != null);
+    // Non-secret attrs should still be present
+    try std.testing.expect(std.mem.indexOf(u8, output, "user=admin") != null);
 }
