@@ -40,15 +40,31 @@ pub fn setFatalHook(hook: FatalHookFn) void {
     @atomicStore(FatalHookFn, &fatal_hook, hook, .release);
 }
 
+/// Maximum length for a logger name (including parent.child concatenation).
+const max_name_len = 256;
+
 /// Logger provides the main logging interface.
 pub const Logger = struct {
     handler: Handler,
     level: Level,
     clock: Clock,
     name: []const u8,
+    name_buf: [max_name_len]u8 = .{0} ** max_name_len,
+    name_len: u16 = 0,
     context_attrs: []const Attr,
     translator: ?Translator,
     locale: []const u8,
+
+    /// Return the logger name. When the name is stored in the internal
+    /// buffer (after concatenation), this returns a slice into the
+    /// caller's own `name_buf`, which is safe because Logger is a
+    /// value type and the buffer travels with the struct.
+    pub fn getName(self: *const Logger) []const u8 {
+        if (self.name_len > 0) {
+            return self.name_buf[0..self.name_len];
+        }
+        return self.name;
+    }
 
     /// Initialize a new logger.
     pub fn init(handler: Handler, level: Level, clock: Clock) Logger {
@@ -64,17 +80,39 @@ pub const Logger = struct {
     }
 
     /// Create a named child logger.
+    /// If the current logger has a name, the child name is concatenated
+    /// as "parent.child". If the current logger has no name, the child
+    /// name is used as-is.
     pub fn named(self: Logger, child_name: []const u8) Logger {
-        // In a real impl, we'd concatenate parent.child
-        return .{
+        var child = Logger{
             .handler = self.handler,
             .level = self.level,
             .clock = self.clock,
             .name = child_name,
+            .name_len = 0,
             .context_attrs = self.context_attrs,
             .translator = self.translator,
             .locale = self.locale,
         };
+
+        const parent_name = self.getName();
+        if (parent_name.len > 0) {
+            // Copy the parent name into a temporary buffer to avoid
+            // aliasing when self.name points into self.name_buf.
+            var parent_tmp: [max_name_len]u8 = undefined;
+            @memcpy(parent_tmp[0..parent_name.len], parent_name);
+            const safe_parent = parent_tmp[0..parent_name.len];
+
+            const written = std.fmt.bufPrint(&child.name_buf, "{s}.{s}", .{ safe_parent, child_name }) catch {
+                // If the concatenated name exceeds the buffer, fall back to
+                // using the child name alone.
+                return child;
+            };
+            child.name_len = @intCast(written.len);
+            child.name = "";
+        }
+
+        return child;
     }
 
     /// Create a logger with additional context attributes.
@@ -84,6 +122,8 @@ pub const Logger = struct {
             .level = self.level,
             .clock = self.clock,
             .name = self.name,
+            .name_buf = self.name_buf,
+            .name_len = self.name_len,
             .context_attrs = attrs,
             .translator = self.translator,
             .locale = self.locale,
@@ -97,6 +137,8 @@ pub const Logger = struct {
             .level = self.level,
             .clock = self.clock,
             .name = self.name,
+            .name_buf = self.name_buf,
+            .name_len = self.name_len,
             .context_attrs = self.context_attrs,
             .translator = self.translator,
             .locale = self.locale,
@@ -110,6 +152,8 @@ pub const Logger = struct {
             .level = self.level,
             .clock = self.clock,
             .name = self.name,
+            .name_buf = self.name_buf,
+            .name_len = self.name_len,
             .context_attrs = self.context_attrs,
             .translator = t,
             .locale = locale,
@@ -147,7 +191,7 @@ pub const Logger = struct {
             .level = level,
             .msg_id = msg_id,
             .message = message,
-            .logger = self.name,
+            .logger = self.getName(),
             .source_file = "",
             .source_line = 0,
             .attrs = attrs,
@@ -185,7 +229,7 @@ pub const Logger = struct {
             .level = level,
             .msg_id = msg_id,
             .message = message,
-            .logger = self.name,
+            .logger = self.getName(),
             .source_file = src.file,
             .source_line = src.line,
             .attrs = attrs,
@@ -247,12 +291,42 @@ test "Logger.enabled" {
     try std.testing.expect(logger.enabled(.@"error"));
 }
 
-test "Logger.named" {
+test "Logger.named concatenates parent.child" {
+    const handler = @import("handlers/discard_handler.zig").init();
+    var logger = Logger.init(handler, .info, Clock.system());
+
+    // When parent has no name, child name is used as-is
+    const child = logger.named("child");
+    try std.testing.expectEqualStrings("child", child.getName());
+
+    // When parent has a name, result is "parent.child"
+    logger.name = "parent";
+    const child2 = logger.named("child");
+    try std.testing.expectEqualStrings("parent.child", child2.getName());
+}
+
+test "Logger.named chained concatenation" {
     const handler = @import("handlers/discard_handler.zig").init();
     const logger = Logger.init(handler, .info, Clock.system());
-    const child = logger.named("child");
 
-    try std.testing.expectEqualStrings("child", child.name);
+    const http_logger = logger.named("http");
+    try std.testing.expectEqualStrings("http", http_logger.getName());
+
+    const server_logger = http_logger.named("server");
+    try std.testing.expectEqualStrings("http.server", server_logger.getName());
+
+    const handler_logger = server_logger.named("handler");
+    try std.testing.expectEqualStrings("http.server.handler", handler_logger.getName());
+}
+
+test "Logger.named with empty parent uses child name" {
+    const handler = @import("handlers/discard_handler.zig").init();
+    const logger = Logger.init(handler, .info, Clock.system());
+
+    try std.testing.expectEqualStrings("", logger.getName());
+
+    const child = logger.named("myservice");
+    try std.testing.expectEqualStrings("myservice", child.getName());
 }
 
 test "fatal_hook uses atomic access" {

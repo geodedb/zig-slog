@@ -220,3 +220,80 @@ test "truncate" {
     const t2 = truncate(&buf, "this is a long string", 10);
     try std.testing.expectEqualStrings("this is...", t2);
 }
+
+test "sanitizeKey control character escaping" {
+    var buf: [MAX_KEY_LENGTH]u8 = undefined;
+
+    const key_nl = sanitizeKey(&buf, "key\nname");
+    try std.testing.expectEqualStrings("key_name", key_nl);
+
+    const key_cr = sanitizeKey(&buf, "key\rname");
+    try std.testing.expectEqualStrings("key_name", key_cr);
+
+    const key_tab = sanitizeKey(&buf, "key\tname");
+    try std.testing.expectEqualStrings("key_name", key_tab);
+}
+
+test "sanitizeKey hex control characters" {
+    var buf: [MAX_KEY_LENGTH]u8 = undefined;
+
+    const key_soh = sanitizeKey(&buf, "key\x01val");
+    try std.testing.expectEqualStrings("key_val", key_soh);
+
+    const key_us = sanitizeKey(&buf, "key\x1Fval");
+    try std.testing.expectEqualStrings("key_val", key_us);
+
+    const key_nul = sanitizeKey(&buf, "key\x00val");
+    try std.testing.expectEqualStrings("key_val", key_nul);
+}
+
+test "sanitizeKey clean passthrough" {
+    var buf: [MAX_KEY_LENGTH]u8 = undefined;
+
+    const key1 = sanitizeKey(&buf, "normalKey123");
+    try std.testing.expectEqualStrings("normalKey123", key1);
+
+    const key2 = sanitizeKey(&buf, "my-key_name.sub");
+    try std.testing.expectEqualStrings("my-key_name.sub", key2);
+
+    const key3 = sanitizeKey(&buf, "x");
+    try std.testing.expectEqualStrings("x", key3);
+}
+
+test "sanitizeKey truncation" {
+    var buf: [MAX_KEY_LENGTH]u8 = undefined;
+
+    const long_key = "a" ** (MAX_KEY_LENGTH + 10);
+    const result = sanitizeKey(&buf, long_key);
+    try std.testing.expectEqual(MAX_KEY_LENGTH, result.len);
+
+    const exact_key = "b" ** MAX_KEY_LENGTH;
+    const exact_result = sanitizeKey(&buf, exact_key);
+    try std.testing.expectEqual(MAX_KEY_LENGTH, exact_result.len);
+}
+
+test "sanitizeKey special characters replaced" {
+    var buf: [MAX_KEY_LENGTH]u8 = undefined;
+
+    const key_space = sanitizeKey(&buf, "key name");
+    try std.testing.expectEqualStrings("key_name", key_space);
+
+    const key_slash = sanitizeKey(&buf, "path/to/key");
+    try std.testing.expectEqualStrings("path_to_key", key_slash);
+}
+
+test "isValidKey edge cases" {
+    try std.testing.expect(!isValidKey(""));
+
+    const max_key = "a" ** MAX_KEY_LENGTH;
+    try std.testing.expect(isValidKey(max_key));
+
+    const over_key = "a" ** (MAX_KEY_LENGTH + 1);
+    try std.testing.expect(!isValidKey(over_key));
+
+    try std.testing.expect(isValidKey("_-._-."));
+
+    try std.testing.expect(!isValidKey("has space"));
+    try std.testing.expect(!isValidKey("has\ttab"));
+    try std.testing.expect(!isValidKey("has\nnewline"));
+}

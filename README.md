@@ -245,6 +245,41 @@ const logger = base_logger.withTranslator("es", catalog.translator());
 try logger.info("app.started", &.{});  // Logs "aplicacion iniciada"
 ```
 
+## Parallel Operations
+
+The parallel operations module provides high-performance concurrent processing for logging operations including batch record formatting, multi-handler dispatch, and parallel sink writes. Each operation automatically falls back to sequential execution below a configurable threshold, so there is no overhead for small workloads.
+
+```zig
+const slog = @import("slog");
+const parallel = slog.parallel;
+
+// Format multiple log records in parallel (uses parallelism for 8+ records)
+var inputs: [16]parallel.RecordInput = undefined;
+var buffers: [16][]u8 = undefined;
+var results: [16]parallel.FormattedRecord = undefined;
+
+for (&buffers) |*buf| {
+    buf.* = allocator.alloc(u8, 1024) catch unreachable;
+}
+
+for (&inputs) |*input| {
+    input.* = .{
+        .time_utc_us = 0,
+        .level = 2,
+        .message = "hello world",
+        .logger = "myapp",
+        .attrs_json = "{}",
+    };
+}
+
+parallel.parallelRecordFormat(&inputs, &buffers, &results, myFormatter);
+
+// Dispatch a record to multiple handlers in parallel (2+ handlers)
+parallel.parallelHandlerDispatch(&handlers, record_data, &dispatch_results);
+```
+
+Parallel operations require the [spice](https://github.com/zig-gamedev/spice) dependency for thread pool management. It is enabled by default and can be toggled with `-Dspice=true` or `-Dspice=false` at build time.
+
 ## Feature Flags
 
 ### Journald (Linux)

@@ -74,17 +74,21 @@ pub const Context = struct {
     fn connect(self: *Context) !void {
         if (self.stream != null) return;
 
-        const address = std.net.Address.parseIp4(self.options.host, self.options.port) catch {
-            // Try IPv6
-            const addr = std.net.Address.parseIp6(self.options.host, self.options.port) catch {
-                return error.ConnectionFailed;
-            };
+        // Fast path: try parsing as literal IPv4 or IPv6 address
+        if (std.net.Address.parseIp4(self.options.host, self.options.port)) |address| {
+            self.stream = std.net.tcpConnectToAddress(address) catch return error.ConnectionFailed;
+            self.applySocketTimeouts();
+            return;
+        } else |_| {}
+
+        if (std.net.Address.parseIp6(self.options.host, self.options.port)) |addr| {
             self.stream = std.net.tcpConnectToAddress(addr) catch return error.ConnectionFailed;
             self.applySocketTimeouts();
             return;
-        };
+        } else |_| {}
 
-        self.stream = std.net.tcpConnectToAddress(address) catch return error.ConnectionFailed;
+        // Slow path: resolve hostname via DNS using tcpConnectToHost
+        self.stream = std.net.tcpConnectToHost(self.allocator, self.options.host, self.options.port) catch return error.ConnectionFailed;
         self.applySocketTimeouts();
     }
 
@@ -317,4 +321,16 @@ test "TcpSink init" {
 
     const handler = init(&ctx);
     _ = handler;
+}
+
+test "TcpSink init with hostname" {
+    const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator, .{
+        .host = "logserver.example.com",
+        .port = 5514,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    try std.testing.expectEqualStrings("logserver.example.com", ctx.options.host);
+    try std.testing.expectEqual(@as(u16, 5514), ctx.options.port);
 }

@@ -645,3 +645,109 @@ test "RotatingFileHandler write buffering" {
     }
     try std.testing.expectEqual(@as(usize, 10), newline_count);
 }
+
+test "RotatingFileHandler multiple writes track size" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/size_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 1024 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "size tracking",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    try handler.handle(&rec);
+    const size_after_first = ctx.current_size;
+    try std.testing.expect(size_after_first > 0);
+
+    try handler.handle(&rec);
+    const size_after_second = ctx.current_size;
+
+    try std.testing.expect(size_after_second > size_after_first);
+}
+
+test "RotatingFileHandler level filtering" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/filter_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .@"error", Clock.system());
+    defer ctx.deinit();
+
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .debug,
+        .msg_id = "test",
+        .message = "should be filtered",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    try handler.handle(&rec);
+    try std.testing.expectEqual(@as(usize, 0), ctx.current_size);
+}
+
+test "RotatingFileHandler deinit closes file" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/deinit_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+
+    try std.testing.expect(ctx.file != null);
+
+    ctx.deinit();
+
+    try std.testing.expect(ctx.file == null);
+}

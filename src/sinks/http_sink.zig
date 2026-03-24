@@ -124,15 +124,11 @@ pub const Context = struct {
     }
 
     fn sendHttp(self: *Context, data: []const u8) bool {
-        // Resolve address
-        const address = std.net.Address.parseIp4(self.host, self.port) catch {
-            return false;
-        };
-
-        // Connect
-        const stream = std.net.tcpConnectToAddress(address) catch {
-            return false;
-        };
+        // Connect: fast path for literal IP, slow path with DNS resolution
+        const stream = if (std.net.Address.parseIp4(self.host, self.port)) |address|
+            std.net.tcpConnectToAddress(address) catch return false
+        else |_|
+            std.net.tcpConnectToHost(self.allocator, self.host, self.port) catch return false;
         defer stream.close();
 
         // Apply socket timeouts
@@ -366,6 +362,19 @@ test "HttpSink URL parsing" {
         }, .info, Clock.system());
         try std.testing.expectError(error.HttpsNotSupported, result);
     }
+}
+
+test "HttpSink init with hostname" {
+    const allocator = std.testing.allocator;
+
+    var ctx = try Context.init(allocator, .{
+        .url = "http://logserver.example.com:9200/logs",
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    try std.testing.expectEqualStrings("logserver.example.com", ctx.host);
+    try std.testing.expectEqual(@as(u16, 9200), ctx.port);
+    try std.testing.expectEqualStrings("/logs", ctx.path);
 }
 
 test "HttpSink containsControlChars" {

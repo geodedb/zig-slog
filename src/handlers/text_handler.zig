@@ -375,3 +375,130 @@ test "TextHandler sanitizes string value control chars" {
     // Tabs should be escaped
     try std.testing.expect(std.mem.indexOf(u8, output, "value\\twith\\ttabs") != null);
 }
+
+test "TextHandler key sanitization with control characters" {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "sanitize test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("bad\nkey", "value1"),
+            Attr.string("bad\rkey", "value2"),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    // Control characters in keys should be replaced with '_' by sanitizeKey
+    try std.testing.expect(std.mem.indexOf(u8, output, "bad_key=value1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "bad_key=value2") != null);
+    // Original control characters should not appear in the key portion
+    try std.testing.expect(std.mem.indexOf(u8, output, "bad\nkey") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "bad\rkey") == null);
+}
+
+test "TextHandler all value types" {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "value types",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("str_key", "hello"),
+            Attr.int("i64_key", -42),
+            Attr.uint("u64_key", 999),
+            Attr.float("f64_key", 3.140000),
+            Attr.boolean("bool_true", true),
+            Attr.boolean("bool_false", false),
+            Attr.bytes("bytes_key", &[_]u8{ 0xDE, 0xAD }),
+            Attr.err("err_key", error.OutOfMemory),
+            Attr.secret("secret_key", "my_secret"),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "str_key=hello") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "i64_key=-42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "u64_key=999") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "f64_key=3.14") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "bool_true=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "bool_false=false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "bytes_key=0xdead") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "err_key=OutOfMemory") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "secret_key=[REDACTED]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "my_secret") == null);
+}
+
+test "TextHandler f64 NaN and Inf render as null" {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "nan test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.float("nan_val", std.math.nan(f64)),
+            Attr.float("inf_val", std.math.inf(f64)),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "nan_val=null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "inf_val=null") != null);
+}
+
+test "TextHandler level filtering" {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .warn, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .debug,
+        .msg_id = "test",
+        .message = "should not appear",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    try std.testing.expectEqual(@as(usize, 0), output.len);
+}

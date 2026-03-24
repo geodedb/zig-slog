@@ -73,6 +73,7 @@ pub const rotating_file = @import("handlers/rotating_file.zig");
 pub const syslog = @import("handlers/syslog_rfc5424.zig");
 pub const journald = @import("handlers/journald.zig");
 pub const windows_eventlog = @import("handlers/windows_eventlog.zig");
+pub const multi_handler = @import("handlers/multi_handler.zig");
 
 // Network sinks
 pub const tcp_sink = @import("sinks/tcp_sink.zig");
@@ -88,6 +89,7 @@ pub const RotatingFileHandler = rotating_file;
 pub const SyslogHandler = syslog;
 pub const JournaldHandler = journald;
 pub const WindowsEventLogHandler = windows_eventlog;
+pub const MultiHandler = multi_handler;
 pub const TcpSink = tcp_sink;
 pub const UdpSink = udp_sink;
 pub const HttpSink = http_sink;
