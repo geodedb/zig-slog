@@ -32,14 +32,14 @@ const EVENTLOG_AUDIT_FAILURE = 0x0010;
 
 /// Windows Event Log handler context.
 pub const Context = struct {
-    level: Level,
+    level: std.atomic.Value(i32),
     source_name: []const u8,
     event_handle: if (is_available) ?std.os.windows.HANDLE else void,
     mutex: std.Thread.Mutex,
 
     pub fn init(level: Level, source_name: []const u8) Context {
         var ctx = Context{
-            .level = level,
+            .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .source_name = source_name,
             .event_handle = if (is_available) null else {},
             .mutex = .{},
@@ -90,7 +90,8 @@ fn levelToEventType(level: Level) u16 {
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    if (!rec.level.atLeast(ctx.level)) return;
+    const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
+    if (!rec.level.atLeast(current_level)) return;
 
     if (!is_available) {
         return error.FeatureDisabled;
@@ -167,7 +168,7 @@ fn withGroup(ctx_ptr: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.level = level;
+    ctx.level.store(@intFromEnum(level), .release);
 }
 
 fn flush(_: *anyopaque, _: u32) HandlerError!void {

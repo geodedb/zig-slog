@@ -453,7 +453,8 @@ test "JSONHandler - with source info" {
     try handler.handle(&rec);
     const output = fbs.getWritten();
 
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"source\":{\"file\":\"main.zig\",\"line\":100}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"source_file\":\"main.zig\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"source_line\":100") != null);
 }
 
 // ============================================================================
@@ -579,9 +580,9 @@ test "SyslogHandler - control character escaping in SD values" {
 
 test "SyslogHandler - all facility types" {
     const facilities = [_]slogz.syslog.Facility{
-        .kern, .user, .mail, .daemon, .auth, .syslog, .lpr, .news,
-        .uucp, .cron, .authpriv, .ftp, .ntp, .audit, .alert, .clock,
-        .local0, .local1, .local2, .local3, .local4, .local5, .local6, .local7,
+        .kern,   .user,   .mail,     .daemon, .auth,   .syslog, .lpr,    .news,
+        .uucp,   .cron,   .authpriv, .ftp,    .ntp,    .audit,  .alert,  .clock,
+        .local0, .local1, .local2,   .local3, .local4, .local5, .local6, .local7,
     };
 
     for (facilities) |facility| {

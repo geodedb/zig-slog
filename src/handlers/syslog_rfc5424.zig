@@ -75,7 +75,7 @@ pub const SyslogOptions = struct {
 /// Syslog handler context.
 pub const Context = struct {
     writer: std.io.AnyWriter,
-    level: Level,
+    level: std.atomic.Value(i32),
     clock: Clock,
     options: SyslogOptions,
     context_attrs: []const Attr,
@@ -84,7 +84,7 @@ pub const Context = struct {
     pub fn init(writer: std.io.AnyWriter, level: Level, clock: Clock, options: SyslogOptions) Context {
         return .{
             .writer = writer,
-            .level = level,
+            .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
             .options = options,
             .context_attrs = &.{},
@@ -112,7 +112,8 @@ fn calcPri(facility: Facility, severity: Severity) u8 {
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    if (!rec.level.atLeast(ctx.level)) return;
+    const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
+    if (!rec.level.atLeast(current_level)) return;
 
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
@@ -132,8 +133,8 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     writer.writeAll(&ts_buf) catch return error.WriteFailed;
     writer.writeByte(' ') catch return error.WriteFailed;
 
-    // HOSTNAME
-    writer.writeAll(ctx.options.hostname) catch return error.WriteFailed;
+    // HOSTNAME (sanitize to printable ASCII per RFC5424)
+    writeSyslogName(writer, ctx.options.hostname) catch return error.WriteFailed;
     writer.writeByte(' ') catch return error.WriteFailed;
 
     // APP-NAME
@@ -299,7 +300,7 @@ fn withGroup(ctx_ptr: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.level = level;
+    ctx.level.store(@intFromEnum(level), .release);
 }
 
 fn flush(_: *anyopaque, _: u32) HandlerError!void {

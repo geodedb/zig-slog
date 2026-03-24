@@ -19,11 +19,8 @@ const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
 const Clock = @import("../internal/clock.zig").Clock;
-const rfc3339 = @import("../fmt/rfc3339.zig");
 const metrics = @import("../metrics/metrics.zig");
-const redact = @import("../util/redact.zig");
-const sanitize = @import("../util/sanitize.zig");
-const writeTextValue = @import("../fmt/text_value.zig").writeTextValue;
+const writeTextRecord = @import("../fmt/text_record.zig").writeTextRecord;
 
 /// Write buffer size (8KB).
 const WRITE_BUF_SIZE = 8192;
@@ -42,7 +39,7 @@ pub const Context = struct {
     options: RotationOptions,
     file: ?std.fs.File,
     current_size: usize,
-    level: Level,
+    level: std.atomic.Value(i32),
     clock: Clock,
     mutex: std.Thread.Mutex,
     path_buf: [std.fs.max_path_bytes]u8,
@@ -59,7 +56,7 @@ pub const Context = struct {
             .options = options,
             .file = null,
             .current_size = 0,
-            .level = level,
+            .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
             .mutex = .{},
             .path_buf = undefined,
@@ -113,6 +110,7 @@ pub const Context = struct {
 
         self.file = std.fs.cwd().createFile(path, .{
             .truncate = false,
+            .mode = 0o600, // Owner read/write only -- log files may contain sensitive data
         }) catch |err| {
             return switch (err) {
                 error.AccessDenied => error.WriteFailed,
@@ -265,7 +263,8 @@ pub const Context = struct {
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    if (!rec.level.atLeast(ctx.level)) return;
+    const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
+    if (!rec.level.atLeast(current_level)) return;
 
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
@@ -276,44 +275,8 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     // Format the record
     var buf: [8192]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
 
-    // Timestamp
-    var ts_buf: [27]u8 = undefined;
-    rfc3339.formatTimestamp(&ts_buf, rec.time_utc_us);
-    writer.writeAll(&ts_buf) catch return error.WriteFailed;
-    writer.writeByte(' ') catch return error.WriteFailed;
-
-    // Level
-    writer.writeAll(rec.level.asText()) catch return error.WriteFailed;
-    writer.writeByte(' ') catch return error.WriteFailed;
-
-    // Logger name
-    if (rec.logger.len > 0) {
-        writer.writeAll(rec.logger) catch return error.WriteFailed;
-        writer.writeByte(' ') catch return error.WriteFailed;
-    }
-
-    // Message (sanitize to prevent log injection)
-    sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
-
-    // Attributes
-    for (rec.attrs) |attr| {
-        writer.writeByte(' ') catch return error.WriteFailed;
-        // Sanitize key
-        var key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
-        const key = sanitize.sanitizeKey(&key_buf, attr.key);
-        writer.writeAll(key) catch return error.WriteFailed;
-        writer.writeByte('=') catch return error.WriteFailed;
-        // Auto-redact sensitive keys
-        if (redact.isSensitiveKey(attr.key)) {
-            writer.writeAll(redact.REDACTED) catch return error.WriteFailed;
-        } else {
-            writeTextValue(writer, attr.value) catch return error.WriteFailed;
-        }
-    }
-
-    writer.writeByte('\n') catch return error.WriteFailed;
+    writeTextRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
 
     ctx.write(fbs.getWritten()) catch return error.WriteFailed;
 }
@@ -334,7 +297,7 @@ fn withGroup(ctx_ptr: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.level = level;
+    ctx.level.store(@intFromEnum(level), .release);
 }
 
 fn flush(ctx_ptr: *anyopaque, _: u32) HandlerError!void {

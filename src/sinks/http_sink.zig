@@ -4,13 +4,12 @@
 //! HTTP sink - sends log records over HTTP POST.
 //!
 //! Features:
-//! - JSON payload batching
+//! - Per-request TCP connections (no pooling)
 //! - Configurable retry with exponential backoff
 //! - Custom headers support
-//! - Connection pooling (simplified)
+//! - Header injection prevention (control character filtering)
 
 const std = @import("std");
-const json = @import("json");
 const Level = @import("../level.zig").Level;
 const Record = @import("../record.zig").Record;
 const Attr = @import("../value.zig").Attr;
@@ -18,11 +17,8 @@ const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
 const Clock = @import("../internal/clock.zig").Clock;
-const rfc3339 = @import("../fmt/rfc3339.zig");
-const redact = @import("../util/redact.zig");
-const sanitize = @import("../util/sanitize.zig");
 const metrics = @import("../metrics/metrics.zig");
-const writeJsonValue = @import("../fmt/json_value.zig").writeJsonValue;
+const writeJsonRecord = @import("../fmt/json_record.zig").writeJsonRecord;
 
 /// HTTP sink options.
 pub const HttpOptions = struct {
@@ -45,7 +41,7 @@ pub const HttpOptions = struct {
 pub const Context = struct {
     allocator: std.mem.Allocator,
     options: HttpOptions,
-    level: Level,
+    level: std.atomic.Value(i32),
     clock: Clock,
     mutex: std.Thread.Mutex,
     consecutive_failures: u32,
@@ -89,7 +85,7 @@ pub const Context = struct {
         return .{
             .allocator = allocator,
             .options = options,
-            .level = level,
+            .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
             .mutex = .{},
             .consecutive_failures = 0,
@@ -196,55 +192,14 @@ fn containsControlChars(s: []const u8) bool {
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    if (!rec.level.atLeast(ctx.level)) return;
+    const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
+    if (!rec.level.atLeast(current_level)) return;
 
     // Format record as JSON OUTSIDE the mutex
     var buf: [16384]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
 
-    // Use a fixed buffer allocator for the encoder's state stack
-    var stack_buf: [128]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&stack_buf);
-
-    var enc = json.streamingEncoder(fba.allocator(), writer, .{});
-    defer enc.deinit();
-
-    enc.beginObject() catch return error.WriteFailed;
-
-    // time
-    var ts_buf: [27]u8 = undefined;
-    rfc3339.formatTimestamp(&ts_buf, rec.time_utc_us);
-    enc.writeKey("time") catch return error.WriteFailed;
-    enc.writeString(&ts_buf) catch return error.WriteFailed;
-
-    // level
-    enc.writeKey("level") catch return error.WriteFailed;
-    enc.writeString(rec.level.asText()) catch return error.WriteFailed;
-
-    // msg
-    enc.writeKey("msg") catch return error.WriteFailed;
-    enc.writeString(rec.message) catch return error.WriteFailed;
-
-    // logger
-    if (rec.logger.len > 0) {
-        enc.writeKey("logger") catch return error.WriteFailed;
-        enc.writeString(rec.logger) catch return error.WriteFailed;
-    }
-
-    // attrs
-    var key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
-    for (rec.attrs) |attr| {
-        const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);
-        enc.writeKey(sanitized_key) catch return error.WriteFailed;
-        if (redact.isSensitiveKey(attr.key)) {
-            enc.writeString(redact.REDACTED) catch return error.WriteFailed;
-        } else {
-            writeJsonValue(&enc, attr.value) catch return error.WriteFailed;
-        }
-    }
-
-    enc.endObject() catch return error.WriteFailed;
+    writeJsonRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
 
     const output = fbs.getWritten();
 
@@ -274,7 +229,7 @@ fn withGroup(ctx_ptr: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.level = level;
+    ctx.level.store(@intFromEnum(level), .release);
 }
 
 fn flush(_: *anyopaque, _: u32) HandlerError!void {

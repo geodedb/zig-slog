@@ -59,15 +59,6 @@ pub fn writeTextValue(writer: anytype, value: Value) !void {
 
 // --- Tests ---
 
-fn testWrite(value: Value) ![]const u8 {
-    var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try writeTextValue(fbs.writer(), value);
-    const written = fbs.getWritten();
-    // Copy to a stack slice for comparison
-    return written;
-}
-
 test "writeTextValue str" {
     var buf: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);

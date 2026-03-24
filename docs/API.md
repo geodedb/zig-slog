@@ -113,7 +113,7 @@ const handler = slog.json.init(&ctx);
 
 Output format:
 ```json
-{"time":"2025-01-02T03:04:05.000000Z","level":"INFO","msg":"Message","logger":"myapp","attrs":{"key":"value","count":42}}
+{"time":"2025-01-02T03:04:05.000000Z","level":"INFO","msg":"Message","logger":"myapp","key":"value","count":42}
 ```
 
 ### Rotating File Handler
@@ -323,15 +323,16 @@ pub const RecordError = error{
 ## Convenience Functions
 
 ```zig
-// Stderr text handler
-const result = slog.stderrHandler(.info);
-// result.ctx, result.handler
+// Stderr text handler (caller provides context for stable address)
+var text_ctx: slog.text.Context = undefined;
+const handler = slog.stderrHandler(&text_ctx, .info);
 
-// Stderr JSON handler
-const result = slog.stderrJsonHandler(.info);
+// Stderr JSON handler (caller provides context for stable address)
+var json_ctx: slog.json.Context = undefined;
+const json_handler = slog.stderrJsonHandler(&json_ctx, .info);
 
 // Discard handler
-const handler = slog.discardHandler();
+const discard = slog.discardHandler();
 ```
 
 ## Generating Full Documentation

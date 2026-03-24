@@ -27,6 +27,8 @@ const std = @import("std");
 const Record = @import("../record.zig").Record;
 const Attr = @import("../value.zig").Attr;
 const Value = @import("../value.zig").Value;
+const redact = @import("../util/redact.zig");
+const metrics = @import("../metrics/metrics.zig");
 
 /// Maximum number of attributes stored per queued record.
 /// Reduced from 32 to 8 -- most log records use fewer than 5 attributes.
@@ -119,9 +121,8 @@ fn serializeValue(buf: *[MAX_VALUE_LEN]u8, val: Value) usize {
             return s.len;
         },
         .secret => {
-            const redacted = "[REDACTED]";
-            @memcpy(buf[0..redacted.len], redacted);
-            return redacted.len;
+            @memcpy(buf[0..redact.REDACTED.len], redact.REDACTED);
+            return redact.REDACTED.len;
         },
         .bytes => |b| {
             // Hex-encode with 0x prefix
@@ -200,8 +201,13 @@ pub const QueuedRecord = struct {
         @memcpy(qr.logger_buf[0..qr.logger_len], rec.logger[0..qr.logger_len]);
         @memcpy(qr.source_file_buf[0..qr.source_file_len], rec.source_file[0..qr.source_file_len]);
 
-        // Copy attributes with value serialization
+        // Copy attributes with value serialization.
+        // If the record has more attributes than MAX_STORED_ATTRS, the
+        // excess are silently dropped and counted as dropped metrics.
         const count = @min(rec.attrs.len, MAX_STORED_ATTRS);
+        if (rec.attrs.len > MAX_STORED_ATTRS) {
+            metrics.global.incDropped(rec.attrs.len - MAX_STORED_ATTRS);
+        }
         for (rec.attrs[0..count], 0..) |attr, idx| {
             var stored: StoredAttr = undefined;
 
@@ -283,7 +289,9 @@ pub fn BoundedQueue(comptime T: type) type {
         }
 
         /// Push item, dropping oldest if full.
-        pub fn pushDropOldest(self: *Self, item: T) void {
+        /// Returns the queue length after the push, allowing callers to
+        /// avoid a separate `len()` call (which would re-acquire the mutex).
+        pub fn pushDropOldest(self: *Self, item: T) usize {
             self.mutex.lock();
             defer self.mutex.unlock();
 
@@ -298,6 +306,7 @@ pub fn BoundedQueue(comptime T: type) type {
             self.tail = (self.tail + 1) % self.buffer.len;
             self.count += 1;
             self.not_empty.signal();
+            return self.count;
         }
 
         /// Push item, blocking if full (with timeout).

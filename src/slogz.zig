@@ -19,20 +19,30 @@
 //! const slogz = @import("slogz");
 //!
 //! var text_ctx = slogz.text.Context.init(
-//!     std.fs.File.stderr().deprecatedWriter().any(),
+//!     std.io.getStdErr().writer().any(),
 //!     .info,
 //!     slogz.Clock.system(),
 //! );
 //! const handler = slogz.text.init(&text_ctx);
 //!
-//! var logger = slogz.Logger.init(std.heap.page_allocator, "myapp", handler);
-//! defer logger.deinit();
+//! const logger = slogz.Logger.init(handler, .info, slogz.Clock.system()).named("myapp");
 //!
-//! logger.info("app.started", "Application started", &.{
+//! try logger.info("app.started", &.{
 //!     slogz.Attr.string("version", "1.0.0"),
 //!     slogz.Attr.int("port", 8080),
 //! });
 //! ```
+//!
+//! ## Auto-Redaction
+//!
+//! Keys matching known sensitive patterns (e.g., "password", "api_key",
+//! "token", "ssn", "jwt", "session", etc.) are automatically redacted
+//! in all handler output. Use `Attr.secret()` for explicit redaction of
+//! values whose keys are not in the built-in list.
+//!
+//! **Warning:** Log *messages* are NOT scanned for secrets. Sensitive
+//! data must be passed as structured attributes using `Attr.secret()`
+//! to ensure redaction. Never embed secrets directly in message strings.
 
 const std = @import("std");
 
@@ -54,11 +64,16 @@ pub const Clock = @import("internal/clock.zig").Clock;
 // Formatting
 pub const rfc3339 = @import("fmt/rfc3339.zig");
 pub const json_value = @import("fmt/json_value.zig");
+pub const json_record = @import("fmt/json_record.zig");
 pub const text_value = @import("fmt/text_value.zig");
+pub const text_record = @import("fmt/text_record.zig");
 
 // Utilities
 pub const redact = @import("util/redact.zig");
 pub const sanitize = @import("util/sanitize.zig");
+
+// Internal (exposed for benchmarking)
+pub const queue = @import("internal/queue.zig");
 
 // Metrics
 pub const metrics = @import("metrics/metrics.zig");

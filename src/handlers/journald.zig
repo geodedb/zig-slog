@@ -40,13 +40,13 @@ const LOG_DEBUG = 7;
 
 /// Journald handler context.
 pub const Context = struct {
-    level: Level,
+    level: std.atomic.Value(i32),
     syslog_identifier: []const u8,
     mutex: std.Thread.Mutex,
 
     pub fn init(level: Level, syslog_identifier: []const u8) Context {
         return .{
-            .level = level,
+            .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .syslog_identifier = syslog_identifier,
             .mutex = .{},
         };
@@ -67,7 +67,8 @@ fn levelToPriority(level: Level) u8 {
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    if (!rec.level.atLeast(ctx.level)) return;
+    const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
+    if (!rec.level.atLeast(current_level)) return;
 
     if (!is_available) {
         return error.FeatureDisabled;
@@ -195,7 +196,7 @@ fn withGroup(ctx_ptr: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.level = level;
+    ctx.level.store(@intFromEnum(level), .release);
 }
 
 fn flush(_: *anyopaque, _: u32) HandlerError!void {

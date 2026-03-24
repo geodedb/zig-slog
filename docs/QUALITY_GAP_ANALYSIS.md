@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main
-**Last updated:** 2026-03-24 (rev 3 -- pass 4: NEW-01, NEW-03 closed)
+**Last updated:** 2026-03-24 (rev 5 -- Pass 5 closure: Q-31/32/33/34/35/36/37/38/39/40 Closed; Q-27 remains partially closed)
 **Scoring framework:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -12,14 +12,16 @@
 | Severity | Count | Closed | Won't Do | Open | Partially Closed |
 |----------|-------|--------|----------|------|------------------|
 | Critical | 4 | 4 | 0 | 0 | 0 |
-| High | 7 | 6 | 1 | 0 | 0 |
-| Medium | 12 | 12 | 0 | 0 | 0 |
-| Low | 7 | 5 | 1 | 0 | 1 |
-| **Total** | **30** | **27** | **2** | **0** | **1** |
+| High | 8 | 7 | 1 | 0 | 0 |
+| Medium | 17 | 17 | 0 | 0 | 0 |
+| Low | 11 | 9 | 1 | 0 | 1 |
+| **Total** | **40** | **37** | **2** | **0** | **1** |
 
-### Top Open Risks
+### Remaining Items
 
-1. **deprecatedWriter() in slogz.zig** (PriorityScore 12) -- **Partially Closed**; windows_eventlog.zig fixed, slogz.zig blocked on AnyWriter handler interface refactor.
+All open items resolved in pass 5. Only remaining item is:
+
+1. **deprecatedWriter() in slogz.zig** (Finding 27, PriorityScore 12) -- **Partially Closed**; windows_eventlog.zig fixed, slogz.zig blocked on AnyWriter handler interface refactor.
 
 ---
 
@@ -34,29 +36,39 @@
 | 5 | High | 80 | ci-cd | CI pipeline has no build or test stage | .gitlab-ci.yml | Lines 37-40: `stages: [security, sbom, release]` -- no `build` or `test` stage; comment on line 5 says "requires Zig 0.15.x which is not yet released" | #22 | Build, test, format-check stages added with Zig 0.15.2 image | @maintainers | M | **Closed** (ec068d0) |
 | 6 | High | 64 | api-contract | Network sinks (TCP, UDP, HTTP) drop all record attributes from JSON output | tcp_sink.zig, udp_sink.zig, http_sink.zig | tcp_sink.zig:125-167, udp_sink.zig:86-128, http_sink.zig:185-227: handle() serializes time/level/msg/logger but never iterates `rec.attrs` | #7 | All three sinks now iterate rec.attrs with JSON serialization | @maintainers | S | **Closed** (0ed8afe) |
 | 7 | High | 64 | perf | QueuedRecord i64 serialization broken -- integer values become empty strings | queue.zig | Lines 74-79: `formatInt` result is discarded (`_ = len`), then `break :blk ""` always returns empty string | #21 | Replaced with serializeValue() using std.fmt.bufPrint | @maintainers | S | **Closed** (3fcd5a5) |
+| 31 | High | 64 | api-contract | Logger.with() attrs silently lost -- context_attrs never reach Record or handler | logger.zig, all handlers | logger.zig:119-131: `Logger.with(attrs)` stores `attrs` in `logger.context_attrs` and calls `handler.withAttrs(attrs)` which discards them; logger.zig:189-198: `Record` construction does NOT include `self.context_attrs`; json_handler.zig:103 and text_handler.zig:76 read `ctx.context_attrs` but handler `withAttrs()` never updates it | -- | Logger.log now merges context_attrs into Record.attrs | @maintainers | M | **Closed** (pass 5: Logger.with() attrs now merged into Record) |
 | 8 | High | 48 | architecture | formatBackupPath buffer aliasing causes rotation failure | rotating_file.zig | Lines 107-108, 129-132: `formatBackupPath` writes to `self.path_buf`; calling it twice in the same expression (`old_path` then `new_path`) overwrites `old_path` since both alias `self.path_buf` | #23 | Added path_buf2; formatBackupPath uses separate buffers | @maintainers | S | **Closed** (05c6a16) |
 | 9 | Medium | 48 | maintainability | writeValue function duplicated 3x across handlers | text_handler.zig:111-149, journald.zig:155-177, windows_eventlog.zig:136-158 | Near-identical switch on Value union with minor formatting differences; bug fixes (e.g., @errorName guard) applied to only 1 of 3 copies | -- | All handlers now share consistent writeValue with @errorName guard, sanitizeOutput, and hex lookup table | @maintainers | M | **Closed** (0ed8afe) |
 | 10 | Medium | 48 | maintainability | JSON encoding logic duplicated 3x across network sinks | tcp_sink.zig:125-177, udp_sink.zig:86-134, http_sink.zig:185-233 | Identical JSON record serialization (time, level, msg, logger) repeated in each sink's handle() | -- | All sinks now include attrs serialization; consistent pattern applied | @maintainers | M | **Closed** (0ed8afe) |
+| 33 | Medium | 48 | maintainability | JSON record serialization duplicated across 4 locations | json_handler.zig:45-121, tcp_sink.zig:170-237, udp_sink.zig:89-152, http_sink.zig:196-259 | All four files contain ~50 lines of identical record-level JSON serialization (beginObject, time, level, msg, logger, attrs iteration, endObject). Value-level writeJsonValue was extracted to json_value.zig but the record-level envelope was not. Schema differences (see Finding 35) prevent naive extraction. | -- | Extracted to `src/fmt/json_record.zig`; all 4 callers import shared function | @maintainers | M | **Closed** (pass 5: JSON record formatting extracted to json_record.zig) |
 | 11 | Medium | 36 | architecture | @errorName guard missing in 4 of 5 handlers | json_handler.zig:173, syslog_rfc5424.zig:248, journald.zig:173, windows_eventlog.zig:154 | Only text_handler.zig (lines 139-145) guards against corrupt anyerror values; the other 4 call `@errorName(e)` directly, risking UB on invalid error index | -- | Raw-value guard applied to all handlers (json, syslog, journald, windows_eventlog) | @maintainers | S | **Closed** (0ed8afe) |
 | 12 | Medium | 36 | architecture | Silent error swallowing in rotating_file.zig | rotating_file.zig | Lines 74, 88, 93, 112, 115, 121: `catch {}` on makePath, stat, seekTo, deleteFile, rename operations -- failures go completely unnoticed | -- | Error catch blocks now call metrics.global.incErrors() | @maintainers | S | **Closed** (05c6a16) |
 | 13 | Medium | 36 | api-contract | LoggerOptions re-exported but does not exist in logger.zig | slogz.zig | Line 50: `pub const LoggerOptions = @import("logger.zig").LoggerOptions;` -- logger.zig has no `LoggerOptions` symbol; any consumer referencing `slogz.LoggerOptions` gets a compile error | #25 | Removed phantom LoggerOptions re-export from slogz.zig | @maintainers | S | **Closed** (ec068d0) |
 | 14 | Medium | 36 | tests | FixedClock mechanism is non-functional | clock.zig | Lines 31-58: `FixedClock.init` creates a local struct, calls `fixedNowFn(&fc)` which ignores `self` and returns a generic fn that reads thread-local `fixed_test_timestamp`; the FixedClock's own `timestamp_us` field is never used by the clock | -- | FixedClock now properly wires timestamp_us into returned fn pointer | @maintainers | S | **Closed** (ec068d0) |
 | 15 | Medium | 36 | maintainability | Syslog handler writeSDValue missing @errorName guard | syslog_rfc5424.zig | Line 248: `@errorName(e)` called without the raw-value guard present in text_handler.zig | -- | Raw-value guard applied (covered by finding 11) | @maintainers | S | **Closed** (0ed8afe) |
+| 34 | Medium | 36 | maintainability | Text record formatting duplicated between text_handler and rotating_file | text_handler.zig:44-92, rotating_file.zig:265-318 | Both files contain ~55 lines of identical record-level text serialization (timestamp, level, logger, sanitized message, attrs iteration with key=value). Value-level writeTextValue was extracted to text_value.zig but the record-level formatting was not. | -- | Extracted to `src/fmt/text_record.zig`; both callers import shared function | @maintainers | M | **Closed** (pass 5: text record formatting extracted to text_record.zig) |
+| 35 | Medium | 36 | api-contract | JSON schema inconsistency between json_handler and network sinks | json_handler.zig:98-113, tcp_sink.zig:209-219, udp_sink.zig:128-138, http_sink.zig:235-245 | json_handler nests attrs under `"attrs":{...}` object (line 99) and includes `"source":{...}` (line 87-95) and context_attrs (line 103); network sinks put attrs at the top level of the JSON object with no nesting, no source object, no context_attrs | -- | Reconciled to flat attrs + flat source via shared json_record.zig | @maintainers | M | **Closed** (pass 5: JSON schema reconciled to flat attrs + flat source) |
+| 24 | Medium | 36 | architecture | rotating_file.zig missing close vtable entry | rotating_file.zig | Lines 378-384: vtable has no `.close` entry; `Context.deinit()` at line 75 is unreachable via `Handler.close()`; other handlers with cleanup (tcp/udp/http sinks, async, multi, windows_eventlog) all define `.close` | [#37](https://gitlab.com/devnw/zig/slog/-/issues/37) | Add `close` fn delegating to `deinit()` and wire into vtable | @maintainers | S | **Closed** (close fn added, vtable wired) |
+| 29 | Medium | 36 | tests | No unit tests for json_value.zig and text_value.zig | src/fmt/json_value.zig, src/fmt/text_value.zig | Newly extracted shared modules had zero inline tests; all Value variants untested at the unit level | -- | Added 12 inline tests to json_value.zig and 11 inline tests to text_value.zig covering all Value variants | @maintainers | M | **Closed** (pass 4: 23 total inline tests added) |
+| 32 | Medium | 32 | docs | Module docstring example shows incorrect Logger.init and logger.info signatures | slogz.zig | Lines 28-34: `var logger = slogz.Logger.init(std.heap.page_allocator, "myapp", handler)` -- actual signature is `Logger.init(handler, level, clock)` (3 different args); `logger.info("app.started", "Application started", &.{...})` -- actual signature is `info(msg_id, attrs)` (2 args, not 3); `defer logger.deinit()` -- Logger has no deinit() method | -- | Docstring example updated to match actual API signatures | @maintainers | S | **Closed** (pass 5: slogz.zig docstring example fixed to match Logger.init/info signatures) |
+| 25 | Medium | 30 | cleanup | incReconnections() has zero callers (regression) | metrics.zig, tcp_sink.zig | metrics.zig:87 defines `incReconnections`; `rg "incReconnections" src/` returns only the definition; previously marked Closed (ec068d0) but fix did not persist | [#39](https://gitlab.com/devnw/zig/slog/-/issues/39) | Wire `metrics.global.incReconnections()` into tcp_sink reconnection path | @maintainers | S | **Closed** (incReconnections called on successful reconnection in writeWithRetry) |
+| 30 | Medium | 30 | architecture | json_value.zig bytes truncation at 256 bytes | src/fmt/json_value.zig | Original 512-byte hex buffer only supported 256 input bytes; SHA-512 hashes, AES keys, and typical binary fields exceed this | -- | Buffer increased from 512 to 2048 bytes (1024 input bytes); truncation marker "..." appended for inputs beyond 1024 bytes | @maintainers | S | **Closed** (pass 4: max_input=1024, hex_buf[2048], "..." truncation marker) |
+| 36 | Medium | 24 | api-contract | msg_id field present in Record but absent from all JSON/text outputs | record.zig:23, json_handler.zig:45-121, text_handler.zig:44-92, tcp/udp/http sinks, rotating_file.zig | Record.msg_id is populated by Logger.log (logger.zig:192) but no handler writes it: json_handler writes `"msg":rec.message` (line 78) not msg_id; text_handler writes `rec.message` (line 73); network sinks write `rec.message`. Only syslog_rfc5424 uses msg_id (line 158-159). i18n message lookup ID is lost in all other outputs. | -- | msg_id written to all outputs when different from message | @maintainers | S | **Closed** (pass 5: msg_id written to all JSON/text outputs when non-empty and differs from message) |
 | 16 | Low | 32 | maintainability | VTable boilerplate duplicated across 9+ handlers | All handler files | Every handler defines identical withAttrs/withGroup/setLevel/flush stubs with the same no-op pattern | -- | Depends on withAttrs implementation; separate effort | @maintainers | M | **Won't Do** |
+| 40 | Low | 24 | docs | isSensitiveKey auto-redaction behavior not documented in public API | redact.zig:45-69, all handlers | `isSensitiveKey()` checks 15 patterns (password, token, api_key, etc.) and auto-redacts matching attr keys in all handlers (json_handler.zig:143, text_handler.zig:108, rotating_file.zig:309, tcp_sink.zig:214, udp_sink.zig:133, http_sink.zig:240). No public documentation lists the patterns or explains the behavior. Users may be surprised by auto-redaction. | -- | Docstring added to redact.zig listing all sensitive patterns; auto-redaction section added to slogz.zig module docs | @maintainers | S | **Closed** (pass 5: isSensitiveKey auto-redaction documented in redact.zig and slogz.zig) |
+| 26 | Low | 18 | perf | UDP sink serializes under mutex unlike TCP/HTTP | udp_sink.zig | Lines 132-133: `ctx.mutex.lock()` before JSON formatting; tcp_sink.zig:207 and http_sink.zig:239 format outside mutex then lock only for send | -- | JSON formatting moved outside mutex; lock only for ctx.send() | @maintainers | S | **Closed** |
+| 37 | Medium | 16 | docs | HTTP sink docstring claims "Connection pooling" but implementation creates per-request connections | http_sink.zig | Line 10: `//! - Connection pooling (simplified)` in docstring; Line 127-133: `sendHttp()` creates fresh TCP connection per call via `tcpConnectToAddress`/`tcpConnectToHost`, sends with `Connection: close` header (line 146), and `defer stream.close()`. No connection reuse. | -- | False "Connection pooling" claim removed from docstring | @maintainers | S | **Closed** (pass 5: HTTP sink false pooling claim removed) |
 | 17 | Low | 16 | cleanup | rotating_file.zig imports text_handler but never uses it | rotating_file.zig | Line 22: `const text_handler = @import("text_handler.zig");` -- symbol `text_handler` is never referenced | -- | Unused text_handler import removed | @maintainers | S | **Closed** (05c6a16) |
 | 18 | Low | 16 | cleanup | epochDays / ymdToEpochDay duplicated in clock.zig and rfc3339.zig | clock.zig:111-129, rfc3339.zig:139-155 | Identical algorithm (Howard Hinnant epoch-day conversion) copy-pasted | -- | clock.zig now imports from rfc3339.zig; duplication removed | @maintainers | S | **Closed** (ec068d0) |
+| 27 | Low | 12 | cleanup | deprecatedWriter() API usage at 3 call sites | slogz.zig, windows_eventlog.zig | slogz.zig:114, slogz.zig:128: `std.fs.File.stderr().deprecatedWriter().any()`; windows_eventlog.zig:135: `std.fs.File.stderr().deprecatedWriter()` | [#1](https://gitlab.com/devnw/zig/slog/-/issues/1) | Replace with current Zig 0.15 writer API | @maintainers | S | **Partially Closed** (windows_eventlog.zig fixed; slogz.zig blocked on AnyWriter handler interface refactor) |
+| 38 | Low | 8 | cleanup | Dead testWrite helper in text_value.zig | src/fmt/text_value.zig | Lines 62-68: `fn testWrite(value: Value) ![]const u8` defined but never called; all 11 inline tests below use their own `var buf`/`fbs` pattern instead. | -- | Dead testWrite function removed | @maintainers | S | **Closed** (pass 5: dead testWrite helper removed from text_value.zig) |
+| 39 | Low | 8 | cleanup | "[REDACTED]" string literal duplicated across 3 locations | redact.zig:12, value.zig:25, queue.zig:122 | `redact.zig:12` defines `pub const REDACTED = "[REDACTED]"`; `value.zig:25` has `return "[REDACTED]"` in `Secret.redacted()`; `queue.zig:122` has `const redacted = "[REDACTED]"`. These should all reference `redact.REDACTED`. | -- | value.zig and queue.zig now import redact.REDACTED | @maintainers | S | **Closed** (pass 5: [REDACTED] literal consolidated to redact.REDACTED in value.zig and queue.zig) |
+| 28 | Low | 8 | architecture | error.UnsupportedPlatform not in HandlerError | journald.zig, windows_eventlog.zig | journald.zig:67, windows_eventlog.zig:96: `return error.UnsupportedPlatform` in functions returning `HandlerError!void`; `UnsupportedPlatform` not in `HandlerError` error set | [#26](https://gitlab.com/devnw/zig/slog/-/issues/26) (Closed) | Use `error.FeatureDisabled` or add to `HandlerError` | @maintainers | S | **Closed** (#26) |
 | 19 | Low | 8 | cleanup | BaseHandlerContext defined but never used | handler.zig | Lines 91-120: `pub const BaseHandlerContext` is defined with init/enabled/prefixedKey but no handler imports or uses it | -- | Removed BaseHandlerContext dead code from handler.zig | @maintainers | S | **Closed** (ec068d0) |
 | 20 | Low | 8 | cleanup | Metrics.incReconnections() never called | metrics.zig | Line 74: `pub fn incReconnections` defined but grep finds zero callers across the entire codebase | -- | Wired into tcp_sink.zig reconnection logic | @maintainers | S | **Closed** (ec068d0) |
 | 21 | Critical | 100 | maintainability | writeJsonValue() duplicated verbatim across 4 files | json_handler.zig, tcp_sink.zig, udp_sink.zig, http_sink.zig | json_handler.zig:152, tcp_sink.zig:164, udp_sink.zig:89, http_sink.zig:187: identical `fn writeJsonValue(enc: anytype, value: Value) !void` with same switch arms | [#33](https://gitlab.com/devnw/zig/slog/-/issues/33) | Extracted to `src/fmt/json_value.zig`; all 4 files import shared function | @maintainers | M | **Closed** |
 | 22 | High | 60 | maintainability | writeValue() behavioral drift across 4 text-mode copies | text_handler.zig, journald.zig, windows_eventlog.zig, rotating_file.zig | text_handler.zig:131 uses `{d:.6}` for floats; journald.zig:176 and windows_eventlog.zig:150 use `{d}`; rotating_file.zig:316 uses raw `writeAll` instead of `sanitizeOutput`; marshaler text is `<marshaler>` vs `?` | [#34](https://gitlab.com/devnw/zig/slog/-/issues/34) | Extracted to `src/fmt/text_value.zig` with canonical behavior (f64:.6, 0x hex, `<marshaler>`); all 4 handlers import shared function | @maintainers | M | **Closed** |
 | 23 | High | 60 | architecture | rotating_file.zig missing sanitizeOutput() on .str values | rotating_file.zig | Line 316: `.str => \|s\| try writer.writeAll(s)` -- no `sanitizeOutput()` call; all other text handlers sanitize strings | [#35](https://gitlab.com/devnw/zig/slog/-/issues/35) | Replace `writer.writeAll(s)` with `sanitize.sanitizeOutput(writer, s)` | @maintainers | S | **Closed** (sanitizeOutput applied to .str in writeValue) |
-| 24 | Medium | 36 | architecture | rotating_file.zig missing close vtable entry | rotating_file.zig | Lines 378-384: vtable has no `.close` entry; `Context.deinit()` at line 75 is unreachable via `Handler.close()`; other handlers with cleanup (tcp/udp/http sinks, async, multi, windows_eventlog) all define `.close` | [#37](https://gitlab.com/devnw/zig/slog/-/issues/37) | Add `close` fn delegating to `deinit()` and wire into vtable | @maintainers | S | **Closed** (close fn added, vtable wired) |
-| 25 | Medium | 30 | cleanup | incReconnections() has zero callers (regression) | metrics.zig, tcp_sink.zig | metrics.zig:87 defines `incReconnections`; `rg "incReconnections" src/` returns only the definition; previously marked Closed (ec068d0) but fix did not persist | [#39](https://gitlab.com/devnw/zig/slog/-/issues/39) | Wire `metrics.global.incReconnections()` into tcp_sink reconnection path | @maintainers | S | **Closed** (incReconnections called on successful reconnection in writeWithRetry) |
-| 26 | Low | 18 | perf | UDP sink serializes under mutex unlike TCP/HTTP | udp_sink.zig | Lines 132-133: `ctx.mutex.lock()` before JSON formatting; tcp_sink.zig:207 and http_sink.zig:239 format outside mutex then lock only for send | -- | JSON formatting moved outside mutex; lock only for ctx.send() | @maintainers | S | **Closed** |
-| 27 | Low | 12 | cleanup | deprecatedWriter() API usage at 3 call sites | slogz.zig, windows_eventlog.zig | slogz.zig:114, slogz.zig:128: `std.fs.File.stderr().deprecatedWriter().any()`; windows_eventlog.zig:135: `std.fs.File.stderr().deprecatedWriter()` | [#1](https://gitlab.com/devnw/zig/slog/-/issues/1) | Replace with current Zig 0.15 writer API | @maintainers | S | **Partially Closed** (windows_eventlog.zig fixed; slogz.zig blocked on AnyWriter handler interface refactor) |
-| 28 | Low | 8 | architecture | error.UnsupportedPlatform not in HandlerError | journald.zig, windows_eventlog.zig | journald.zig:67, windows_eventlog.zig:96: `return error.UnsupportedPlatform` in functions returning `HandlerError!void`; `UnsupportedPlatform` not in `HandlerError` error set | [#26](https://gitlab.com/devnw/zig/slog/-/issues/26) (Closed) | Use `error.FeatureDisabled` or add to `HandlerError` | @maintainers | S | **Closed** (#26) |
-| 29 | Medium | 36 | tests | No unit tests for json_value.zig and text_value.zig | src/fmt/json_value.zig, src/fmt/text_value.zig | Newly extracted shared modules had zero inline tests; all Value variants untested at the unit level | -- | Added 12 inline tests to json_value.zig and 11 inline tests to text_value.zig covering all Value variants | @maintainers | M | **Closed** (pass 4: 23 total inline tests added) |
-| 30 | Medium | 30 | architecture | json_value.zig bytes truncation at 256 bytes | src/fmt/json_value.zig | Original 512-byte hex buffer only supported 256 input bytes; SHA-512 hashes, AES keys, and typical binary fields exceed this | -- | Buffer increased from 512 to 2048 bytes (1024 input bytes); truncation marker "..." appended for inputs beyond 1024 bytes | @maintainers | S | **Closed** (pass 4: max_input=1024, hex_buf[2048], "..." truncation marker) |
 
 **Notes:**
 - Finding 15 (syslog @errorName guard) is a sub-instance of finding 11; they share a root cause and should be fixed together.
@@ -67,6 +79,11 @@
 - Finding 28 overlaps with existing issue #26 (Closed); no new issue created.
 - Finding 29 (NEW-01) addresses missing unit test coverage for the shared json_value.zig and text_value.zig modules extracted in pass 3.
 - Finding 30 (NEW-03) addresses the json_value.zig bytes encoding buffer being too small for common binary fields (SHA-512, AES keys).
+- Finding 31 refines Finding 4: the handler-level withAttrs no-op was marked Won't Do, but the Logger-level integration bug (context_attrs never propagated to Record) is an independent fix. Logger.log could include context_attrs in the Record without changing handler implementations.
+- Finding 33 deepens Finding 10: attrs serialization was added but the record-level envelope (time/level/msg/logger) remains duplicated.
+- Finding 34 deepens Finding 9: writeTextValue was extracted but the record-level formatting (timestamp/level/logger/message/attrs loop) remains duplicated.
+- Finding 35 is a schema-level consequence of Finding 33's duplication -- the duplicated code diverged in structure.
+- Finding 37 is a documentation-only fix (one-line docstring correction).
 
 ---
 
@@ -78,7 +95,10 @@
 | 1 | AsyncHandler drops ALL record attributes | 100 | Closed |
 | 4 | withAttrs/withGroup universally no-op | 80 | Won't Do |
 | 6 | Network sinks drop all attributes from JSON output | 64 | Closed |
+| 31 | Logger.with() attrs silently lost (context_attrs never reach Record) | 64 | **Closed** (pass 5) |
 | 13 | LoggerOptions re-exported but does not exist | 36 | Closed |
+| 35 | JSON schema inconsistency between json_handler and network sinks | 36 | **Closed** (pass 5) |
+| 36 | msg_id field present in Record but absent from all JSON/text outputs | 24 | **Closed** (pass 5) |
 
 ### architecture
 | Rank | Finding | PriorityScore | Status |
@@ -88,10 +108,10 @@
 | 8 | formatBackupPath buffer aliasing | 48 | Closed |
 | 11 | @errorName guard missing in 4 of 5 handlers | 36 | Closed |
 | 12 | Silent error swallowing in rotating_file | 36 | Closed |
-| 23 | rotating_file missing sanitizeOutput() on .str | 60 | **Closed** |
-| 24 | rotating_file missing close vtable entry | 36 | **Closed** |
+| 23 | rotating_file missing sanitizeOutput() on .str | 60 | Closed |
+| 24 | rotating_file missing close vtable entry | 36 | Closed |
 | 28 | error.UnsupportedPlatform not in HandlerError | 8 | Closed |
-| 30 | json_value.zig bytes truncation at 256 bytes | 30 | **Closed** |
+| 30 | json_value.zig bytes truncation at 256 bytes | 30 | Closed |
 
 ### ci-cd
 | Rank | Finding | PriorityScore | Status |
@@ -102,15 +122,17 @@
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 7 | QueuedRecord i64 serialization broken | 64 | Closed |
-| 26 | UDP sink serializes under mutex | 18 | **Closed** |
+| 26 | UDP sink serializes under mutex | 18 | Closed |
 
 ### maintainability
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
-| 21 | writeJsonValue() duplicated 4x | 100 | **Closed** |
-| 22 | writeValue() behavioral drift 4x | 60 | **Closed** |
+| 21 | writeJsonValue() duplicated 4x | 100 | Closed |
+| 22 | writeValue() behavioral drift 4x | 60 | Closed |
 | 9 | writeValue duplicated 3x | 48 | Closed |
 | 10 | JSON encoding duplicated 3x in sinks | 48 | Closed |
+| 33 | JSON record serialization duplicated 4x | 48 | **Closed** (pass 5) |
+| 34 | Text record formatting duplicated 2x | 36 | **Closed** (pass 5) |
 | 16 | VTable boilerplate duplicated 9x | 32 | Won't Do |
 | 15 | Syslog writeSDValue missing @errorName guard | 36 | Closed |
 
@@ -118,17 +140,26 @@
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 14 | FixedClock mechanism non-functional | 36 | Closed |
-| 29 | No unit tests for json_value.zig and text_value.zig | 36 | **Closed** |
+| 29 | No unit tests for json_value.zig and text_value.zig | 36 | Closed |
+
+### docs
+| Rank | Finding | PriorityScore | Status |
+|------|---------|---------------|--------|
+| 32 | Module docstring example shows incorrect API signatures | 32 | **Closed** (pass 5) |
+| 37 | HTTP sink docstring claims "Connection pooling" falsely | 16 | **Closed** (pass 5) |
+| 40 | isSensitiveKey auto-redaction behavior undocumented | 24 | **Closed** (pass 5) |
 
 ### cleanup
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
-| 25 | incReconnections() zero callers (regression) | 30 | **Closed** |
+| 25 | incReconnections() zero callers (regression) | 30 | Closed |
 | 27 | deprecatedWriter() usage (3 call sites) | 12 | **Partially Closed** |
 | 17 | rotating_file dead import | 16 | Closed |
 | 18 | epochDays / ymdToEpochDay duplicated | 16 | Closed |
 | 19 | BaseHandlerContext dead code | 8 | Closed |
 | 20 | Metrics.incReconnections() dead code | 8 | Closed |
+| 38 | Dead testWrite helper in text_value.zig | 8 | **Closed** (pass 5) |
+| 39 | "[REDACTED]" literal duplicated 3x | 8 | **Closed** (pass 5) |
 
 ---
 
@@ -143,6 +174,12 @@
 | 25 | incReconnections() zero callers (regression) | S | Add `metrics.global.incReconnections()` at tcp_sink reconnection point | **Closed** |
 | 26 | UDP sink serializes under mutex | S | JSON formatting moved outside mutex | **Closed** |
 | 27 | deprecatedWriter() usage | S | Replace with current Zig 0.15 writer API at 3 call sites | **Partially Closed** |
+| 32 | Module docstring incorrect API signatures | S | Update slogz.zig lines 28-34 to match actual Logger.init(handler, level, clock) and logger.info(msg_id, attrs) | **Closed** (pass 5) |
+| 37 | HTTP sink false "Connection pooling" docstring | S | Remove or correct the claim at http_sink.zig:10 | **Closed** (pass 5) |
+| 38 | Dead testWrite helper | S | Remove text_value.zig:62-68 | **Closed** (pass 5) |
+| 39 | "[REDACTED]" literal duplicated 3x | S | Import from redact.zig in value.zig and queue.zig | **Closed** (pass 5) |
+| 36 | msg_id absent from JSON/text output | S | Add "msg_id" key to JSON and text output when non-empty and different from message | **Closed** (pass 5) |
+| 40 | isSensitiveKey auto-redaction undocumented | S | Add docstrings listing the 15 sensitive key patterns | **Closed** (pass 5) |
 
 ### Medium (1-5 days)
 
@@ -150,6 +187,10 @@
 |------|---------|--------|-------|--------|
 | 21 | writeJsonValue() duplicated 4x | M | Extracted to `src/fmt/json_value.zig`; 4 files updated | **Closed** |
 | 22 | writeValue() behavioral drift 4x | M | Extracted to `src/fmt/text_value.zig`; canonical behavior applied | **Closed** |
+| 31 | Logger.with() attrs lost | M | Logger.log now merges context_attrs into Record.attrs | **Closed** (pass 5) |
+| 33 | JSON record serialization duplicated 4x | M | Extracted to `src/fmt/json_record.zig`; schema reconciled | **Closed** (pass 5) |
+| 34 | Text record formatting duplicated 2x | M | Extracted to `src/fmt/text_record.zig` | **Closed** (pass 5) |
+| 35 | JSON schema inconsistency | M | Reconciled to flat attrs + flat source via shared json_record.zig | **Closed** (pass 5) |
 
 ### Strategic (> 5 days)
 
@@ -180,6 +221,16 @@ All findings are tagged **confidence::confirmed** -- each was verified by readin
 - **Finding 26 (UDP mutex scope):** Confirmed at udp_sink.zig:132-133 -- mutex locked before formatting; tcp_sink.zig:207 and http_sink.zig:239 format outside mutex.
 - **Finding 27 (deprecatedWriter):** Confirmed at slogz.zig:114, slogz.zig:128, windows_eventlog.zig:135.
 - **Finding 28 (UnsupportedPlatform):** Confirmed at journald.zig:67 and windows_eventlog.zig:96; `HandlerError` at handler.zig:15-24 does not include `UnsupportedPlatform`.
+- **Finding 31 (Logger.with attrs lost):** Confirmed at logger.zig:119-131 -- `Logger.with(attrs)` sets `context_attrs = attrs` and calls `handler.withAttrs(attrs)` which discards them; logger.zig:189-198 constructs Record with `attrs: attrs` (the call-site attrs), NOT `self.context_attrs`. json_handler.zig:103 reads `ctx.context_attrs` (always `&.{}`); text_handler.zig:76 reads `ctx.context_attrs` (always `&.{}`). The attrs passed to `Logger.with()` are stored in the Logger struct but never reach the Record or the handler context.
+- **Finding 32 (docstring wrong):** Confirmed at slogz.zig:28-34 -- `Logger.init(std.heap.page_allocator, "myapp", handler)` vs actual `Logger.init(handler: Handler, level: Level, clock: Clock)` at logger.zig:70; `logger.info("app.started", "Application started", &.{...})` shows 3 args vs actual 2-arg signature at logger.zig:260; `defer logger.deinit()` references nonexistent method.
+- **Finding 33 (JSON record duplication):** Confirmed by comparing json_handler.zig:45-121, tcp_sink.zig:170-237, udp_sink.zig:89-152, http_sink.zig:196-259 -- all four serialize time/level/msg/logger/attrs with identical patterns (same variable names, same order, same error handling).
+- **Finding 34 (text record duplication):** Confirmed by comparing text_handler.zig:44-92 and rotating_file.zig:265-318 -- identical pattern: timestamp via rfc3339.formatTimestamp, level via asText(), logger name, sanitized message, attrs loop with key=value.
+- **Finding 35 (JSON schema inconsistency):** Confirmed: json_handler.zig:98-113 wraps attrs in `enc.writeKey("attrs"); enc.beginObject()...enc.endObject()` with context_attrs and prefix support; tcp_sink.zig:210-219, udp_sink.zig:128-138, http_sink.zig:235-245 write attrs at top level with no nesting, no prefix, no context_attrs. json_handler.zig:87-95 includes `"source"` object; network sinks do not.
+- **Finding 36 (msg_id absent):** Confirmed -- searched all handler `handle()` functions: none writes `rec.msg_id` to output. json_handler.zig:78 writes `rec.message`; text_handler.zig:73 writes `rec.message`; tcp_sink.zig:201 writes `rec.message`. Only syslog_rfc5424.zig:158-159 uses `rec.msg_id`.
+- **Finding 37 (false connection pooling):** Confirmed at http_sink.zig:10 docstring says "Connection pooling (simplified)"; sendHttp() at line 127-133 creates fresh TCP connection per call, sends `Connection: close` header at line 146, and `defer stream.close()` closes immediately after response.
+- **Finding 38 (dead testWrite):** Confirmed at text_value.zig:62-68 -- `fn testWrite` defined; all 11 tests below (lines 71-162) use inline `var buf`/`var fbs` instead.
+- **Finding 39 (REDACTED duplication):** Confirmed -- `redact.zig:12` defines `pub const REDACTED = "[REDACTED]"`; `value.zig:25` has independent `return "[REDACTED]"`; `queue.zig:122` has independent `const redacted = "[REDACTED]"`.
+- **Finding 40 (auto-redaction undocumented):** Confirmed -- `redact.zig:45` `isSensitiveKey` is called by json_handler.zig:143, text_handler.zig:108, rotating_file.zig:309, tcp_sink.zig:214, udp_sink.zig:133, http_sink.zig:240. The list of 15 sensitive patterns at redact.zig:15-31 is not referenced in any public documentation or module docstring.
 
 ---
 
@@ -188,5 +239,5 @@ All findings are tagged **confidence::confirmed** -- each was verified by readin
 - **Scanner output:** Phase 3 deep review findings provided as input, plus new audit findings from 2026-03-24 deep review.
 - **Verification:** Each finding verified by reading source files at the cited paths and lines.
 - **Scoring:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4. Impact considers severity of failure mode. Likelihood considers how often the code path is exercised.
-- **Deduplication:** Findings 11 and 15 share a root cause (@errorName guard inconsistency). Findings 21/22 deepen 9/10 (consistency was applied but duplication remains). Finding 23 is a specific instance within finding 22. Finding 25 is a regression of finding 20.
-- **Issue tracking:** GitLab issues created via `glab issue create` for findings with PriorityScore >= 30. Existing issues referenced where overlap exists (#1, #26).
+- **Deduplication:** Findings 11 and 15 share a root cause (@errorName guard inconsistency). Findings 21/22 deepen 9/10 (consistency was applied but duplication remains). Finding 23 is a specific instance within finding 22. Finding 25 is a regression of finding 20. Finding 31 refines Finding 4 with an independent Logger-side fix path. Finding 33 deepens Finding 10 (record-level vs value-level). Finding 34 deepens Finding 9 (record-level vs value-level).
+- **Issue tracking:** GitLab issues created via `glab issue create` for findings with PriorityScore >= 30 (in previous passes). This pass is --skip-issues mode; no new GitLab issues created.

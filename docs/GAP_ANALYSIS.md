@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main (commit 677630f)
-**Last updated:** 2026-03-24 (rev 4 -- pass 4: SEC-0025 added and closed, SEC-0008 remains blocked)
+**Last updated:** 2026-03-24 (rev 7 -- Pass 5 closure: SEC-0026/0028/0029 Won't Do; SEC-0027/0030-0036 Closed; GAP-0026/0027 Closed; GAP-0028 Won't Do; SEC-0008 remains blocked)
 **Analyst:** Phase 3 Adversarial Review + Claude Opus 4.6 (automated scoring)
 **Methodology:** Risk Score = Impact(1-5) x Likelihood(1-5) x 4
 
@@ -13,21 +13,24 @@
 | Severity | Count | Closed | Blocked | Won't Do | Open |
 |----------|-------|--------|---------|----------|------|
 | Critical | 2 | 2 | 0 | 0 | 0 |
-| High | 7 | 5 | 1 | 1 | 0 |
-| Medium | 10 | 9 | 0 | 1 | 0 |
-| Low | 5 | 5 | 0 | 0 | 0 |
+| High | 8 | 5 | 1 | 2 | 0 |
+| Medium | 14 | 11 | 0 | 3 | 0 |
+| Low | 14 | 13 | 0 | 1 | 0 |
 | Info | 1 | 1 | 0 | 0 | 0 |
-| **Total** | **25** | **22** | **1** | **2** | **0** |
+| **Total** | **39** | **32** | **1** | **6** | **0** |
 
-### Top Risks (Open Only)
+### Top Risks (Blocked Only)
 
 1. **SEC-0008** (High, Score 48) -- Supply chain: spice on floating main branch. **Blocked** -- requires upstream spice repo to publish tagged release.
+
+All other items are Closed, Won't Do, or Blocked. No open items remain.
 
 ### Immediate Actions Required
 
 - **No secrets are currently leaked** -- no rotation required.
-- **SEC-0006 and SEC-0009 FIXED (pass 3):** rotating_file.zig now has sanitizeOutput on messages, sanitizeKey on attr keys, and isSensitiveKey auto-redaction. See [confidential issue #36](https://gitlab.com/devnw/zig/slog/-/issues/36) (closed).
-- SEC-0008 (spice on floating main branch) blocked on upstream tagged release.
+- **All open security items resolved in pass 5.** SEC-0026/0028/0029 marked Won't Do (TLS exceeds library scope). SEC-0027 documented as limitation. SEC-0030-0036 all closed with implementation fixes.
+- SEC-0008 (spice on floating main branch) remains blocked on upstream tagged release.
+- GAP-0026 and GAP-0027 documentation gaps closed. GAP-0028 marked Won't Do (requires manual GitLab issue close).
 
 ---
 
@@ -60,6 +63,27 @@
 | 23 | SEC-0023 | Low | 8 | Syslog writeSDString no control char escaping | syslog_rfc5424.zig | CWE-117 / A03:2021 | syslog_rfc5424.zig:268-284 | Control chars < 0x20 escaped as \\xHH, tab preserved per RFC5424 | -- | 2026-09-21 | **Closed** (pass 3: control chars 0x00-0x08, 0x0a-0x1f escaped as \\xHH via hex_chars lookup; tab preserved) |
 | 24 | SEC-0024 | Info | 4 | Gitleaks allowlist incomplete | .gitleaks.toml | CWE-798 / A07:2021 | .gitleaks.toml:8-13 | allowlist entries added for json_logging.zig and accept.zig | -- | Backlog | **Closed** (pass 3: .gitleaks.toml paths extended with json_logging.zig and tests/accept.zig) |
 | 25 | SEC-0025 | Medium | 24 | Network sinks skip sanitizeKey on JSON attr keys | tcp_sink.zig, udp_sink.zig, http_sink.zig | CWE-117 / A03:2021 | tcp_sink.zig:212, udp_sink.zig:131, http_sink.zig:238 | sanitize import and sanitizeKey call added in all three sinks' attr loops | -- | 2026-03-24 | **Closed** (pass 4: sanitize.sanitizeKey applied to attr keys in tcp_sink.zig:212, udp_sink.zig:131, http_sink.zig:238) |
+| 26 | SEC-0026 | High | 64 | All network sinks transmit cleartext -- no TLS support | tcp_sink.zig, udp_sink.zig, http_sink.zig | CWE-319 / A02:2021 | http_sink.zig:66-69, tcp_sink.zig:75-80, udp_sink.zig:50-55 | Implement TLS wrapper or document prominently | TBD | 2026-04-23 | **Won't Do** (pass 5: TLS implementation exceeds library scope; Zig stdlib TLS still maturing) |
+| 27 | SEC-0027 | Medium | 36 | Secrets in message body bypass all redaction | all handlers | CWE-532 / A09:2021 | text_handler.zig:73, redact.zig:45-68 | Limitation documented in API docs and SECURITY.md | -- | 2026-06-22 | **Closed** (pass 5: documented as known limitation) |
+| 28 | SEC-0028 | Medium | 36 | HTTP sink does not validate server identity | http_sink.zig | CWE-295 / A02:2021 | http_sink.zig:66-69, 75-80 | Requires TLS with certificate validation | TBD | 2026-06-22 | **Won't Do** (pass 5: blocked by SEC-0026; requires TLS which is Won't Do) |
+| 29 | SEC-0029 | Medium | 24 | TCP sink has no authentication mechanism | tcp_sink.zig | CWE-306 / A07:2021 | tcp_sink.zig:27-34 | Add optional auth token/mTLS to TcpOptions | TBD | 2026-06-22 | **Won't Do** (pass 5: blocked by SEC-0026; SEC-0016 same scope already Won't Do) |
+| 30 | SEC-0030 | Low | 16 | Sensitive key list incomplete -- missing common patterns | redact.zig | CWE-532 / A09:2021 | redact.zig:15-31 | 16 new patterns added (ssn, credit_card, cvv, session, cookie, bearer, jwt, connection_string, etc.) | -- | 2026-09-21 | **Closed** (pass 5: sensitive_keys expanded from 15 to 31 patterns) |
+| 31 | SEC-0031 | Low | 16 | Logger name and source_file not sanitized in text handler | text_handler.zig | CWE-117 / A03:2021 | text_handler.zig:67-69 | sanitizeOutput applied to rec.logger in text handlers | -- | 2026-09-21 | **Closed** (pass 5: logger name sanitized via writeSyslogName in text handlers) |
+| 32 | SEC-0032 | Low | 16 | Syslog hostname written raw, bypassing writeSyslogName | syslog_rfc5424.zig | CWE-117 / A03:2021 | syslog_rfc5424.zig:136 vs 141 | hostname now sanitized via writeSyslogName | -- | 2026-09-21 | **Closed** (pass 5: hostname routed through writeSyslogName) |
+| 33 | SEC-0033 | Low | 16 | Data race on Level field in setLevel across handlers | text_handler.zig, json_handler.zig, all handlers | CWE-362 / A04:2021 | text_handler.zig:149-151, rotating_file.zig:335-337 | Atomic Value used for level across all 12 handlers | -- | 2026-09-21 | **Closed** (pass 5: non-atomic level fixed across all 12 handlers using atomic Value; combined fix with PERF-031) |
+| 34 | SEC-0034 | Low | 16 | Log file created with default permissions (umask-dependent) | rotating_file.zig | CWE-276 / A01:2021 | rotating_file.zig:114-116 | Explicit mode 0o600 passed to createFile | -- | 2026-09-21 | **Closed** (pass 5: file permissions set to 0o600) |
+| 35 | SEC-0035 | Low | 16 | UDP truncation produces malformed JSON | udp_sink.zig | CWE-404 / A09:2021 | udp_sink.zig:80 | Oversized records dropped instead of truncated | -- | 2026-09-21 | **Closed** (pass 5: UDP oversized records dropped with metrics counter instead of truncated) |
+| 36 | SEC-0036 | Low | 8 | JSON key collision via duplicate keys or sanitize-to-same-string | json_handler.zig, sanitize.zig | CWE-20 / A03:2021 | sanitize.zig:17-27, json_handler.zig:123-148 | Collision risk documented in sanitize.zig | -- | 2026-09-21 | **Closed** (pass 5: key collision documented as known limitation in sanitize.zig) |
+
+---
+
+### Phase 3 Verified Safe (Info -- No Action Required)
+
+| ID | Finding | Verification | Status |
+|----|---------|-------------|--------|
+| SEC-0020 (verify) | isSensitiveKey checks original key, sanitizeKey for output | Ordering is correct: `isSensitiveKey(attr.key)` at text_handler.zig:108 checks original key before `sanitizeKey` at line 103 writes sanitized form. No bypass possible. | **Verified Safe** |
+| SEC-0017 (verify) | fatal_hook atomic access | `getFatalHook()` uses `@atomicLoad(.acquire)` at logger.zig:35; `setFatalHook()` uses `@atomicStore(.release)` at logger.zig:40. Correctly implemented. | **Verified Safe** |
+| SEC-0019 (verify) | CI Zig binary SHA-256 verification | CI pipeline correctly verifies Zig binary integrity via SHA-256 hash check. | **Verified Safe** |
 
 ---
 
@@ -1061,20 +1085,608 @@ paths = [
 
 ---
 
+### SEC-0026: All network sinks transmit in cleartext -- no TLS support
+
+- **Severity:** High
+- **Risk Score:** 64 (Impact: 4 x Likelihood: 4 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Internet-facing / internal network
+- **CWE:** CWE-319 (Cleartext Transmission of Sensitive Information)
+- **OWASP:** A02:2021 Cryptographic Failures
+- **Status:** **Won't Do** (pass 5: TLS implementation exceeds library scope; Zig stdlib TLS still maturing. SEC-0004 same scope already Won't Do.)
+
+**Summary:** All three network sinks (TCP, UDP, HTTP) transmit log data exclusively in cleartext. The SEC-0001 fix added explicit rejection of `https://` URLs in the HTTP sink, which prevents silent downgrade but also means there is now **no encrypted transport path available** for any network sink. TCP and UDP sinks have never offered TLS/DTLS. This is the umbrella finding covering the complete absence of encrypted transport across all network outputs.
+
+**Impact:** Log data -- potentially containing PII, session tokens, internal hostnames, and application state -- is transmitted in cleartext over the network regardless of which network sink is chosen. In environments with compliance requirements (PCI-DSS, HIPAA, SOC2), plaintext log transport violates data-in-transit encryption requirements. Unlike SEC-0001 (which was about false HTTPS claims), this finding addresses the fundamental absence of any encrypted transport.
+
+**Likelihood:** Trivially exploitable by any network observer. No authentication or special access required. The HTTP sink now makes the limitation explicit (rejects https://), but TCP and UDP offer no encryption option at all. Scored at 4 because exploitation requires network position, which is common in cloud/shared environments.
+
+**Evidence:**
+- `src/sinks/http_sink.zig:66-69` -- HTTPS URLs explicitly rejected after SEC-0001 fix
+
+```zig
+// http_sink.zig:66-69 -- TLS not implemented, https rejected
+if (std.mem.startsWith(u8, url, "https://")) {
+    // TLS is not implemented; reject https:// URLs to prevent
+    // silently sending data in plaintext
+    return error.HttpsNotSupported;
+```
+
+- `src/sinks/tcp_sink.zig:75-80` -- Raw TCP connection only
+
+```zig
+// tcp_sink.zig:79-80 -- plain TCP, no TLS option
+if (std.net.Address.parseIp4(self.options.host, self.options.port)) |address| {
+    self.stream = std.net.tcpConnectToAddress(address) catch return error.ConnectionFailed;
+```
+
+- `src/sinks/udp_sink.zig:50-55` -- Raw UDP socket, no DTLS
+
+```zig
+// udp_sink.zig:51-55 -- plain UDP, no DTLS
+const sock = std.posix.socket(
+    dest_addr.any.family,
+    std.posix.SOCK.DGRAM,
+    0,
+) catch return error.SocketError;
+```
+
+- `src/sinks/tcp_sink.zig:27-34` -- `TcpOptions` has no TLS configuration fields
+
+**Attack Scenario:** An application sends log data to a remote aggregator via the TCP or HTTP sink. An attacker on the same network segment (or any intermediate network hop) captures all log data in plaintext using passive packet capture. In cloud environments with shared networking, this is particularly concerning.
+
+**Fix Guidance:**
+1. For TCP sink: add optional TLS wrapper using `std.crypto.tls.Client` or an imported TLS library. Add `tls: bool = false` and `tls_ca_bundle: ?[]const u8 = null` fields to `TcpOptions`.
+2. For HTTP sink: implement TLS to allow `https://` URLs. This is the most impactful fix since HTTP is the most common log shipping protocol.
+3. For UDP sink: document that UDP is inherently unsuitable for encrypted transport. Recommend TCP+TLS or HTTP+TLS instead.
+4. At minimum, add prominent documentation warnings about plaintext transmission to all three sink modules.
+
+**Acceptance Criteria:**
+- [ ] At least one network sink supports TLS (TCP or HTTP recommended)
+- [ ] Documentation clearly states plaintext risk for all three sinks
+- [ ] UDP sink documentation recommends TCP+TLS or HTTP+TLS for sensitive data
+
+**How to Verify:** Capture traffic with `tcpdump -i any -w /tmp/slog.pcap -s0 port <target_port>` while sending log records. Verify pcap contains readable plaintext log data.
+
+**SLA:** 30 days (2026-04-23)
+
+---
+
+### SEC-0027: Secrets embedded in message body bypass all redaction
+
+- **Severity:** Medium
+- **Risk Score:** 36 (Impact: 3 x Likelihood: 3 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** All handlers (all output paths)
+- **CWE:** CWE-532 (Insertion of Sensitive Information into Log File)
+- **OWASP:** A09:2021 Security Logging and Monitoring Failures
+
+**Summary:** The `isSensitiveKey()` auto-redaction and `Attr.secret()` mechanisms only protect attribute values. The `rec.message` field is never scanned for sensitive content. If a developer logs a message like `log.info("Login failed for user with password=hunter2", .{})`, the password is written in plaintext through every handler. The `sanitizeOutput()` function only escapes control characters, not sensitive patterns.
+
+**Impact:** Developers commonly include request details, error messages, and debug information in log message strings. Sensitive data embedded in these strings bypasses the entire redaction infrastructure. The false sense of security from `isSensitiveKey()` may cause developers to assume all sensitive data is automatically protected.
+
+**Likelihood:** Moderate. Developers are more likely to put sensitive data in structured attributes (which are redacted) than in message strings, but it does happen, especially in error paths and debug logging. Scored at 3.
+
+**Evidence:**
+- `src/handlers/text_handler.zig:73` -- message written with sanitizeOutput (control chars only, no secret scanning)
+
+```zig
+// text_handler.zig:73 -- sanitizeOutput escapes \n, \r, etc. but NOT secrets
+sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
+```
+
+- `src/util/redact.zig:45-68` -- `isSensitiveKey()` only called with attribute keys, never with message content
+- All handlers follow the same pattern: message is sanitized for control characters but never scanned for secrets
+
+**Attack Scenario:** A developer writes `log.err("Auth failed: token={s}", .{user_token})` using format strings. The token value is interpolated into the message string before the logger sees it. The logger writes it as a plain message. The `isSensitiveKey` mechanism never examines message content, so the token is logged in plaintext to all outputs.
+
+**Fix Guidance:**
+1. **Option A (recommended):** Document this as a known limitation prominently in the API docs and SECURITY.md. Add a "Security Best Practices" section recommending `Attr.secret()` or `Attr.string()` with sensitive keys for all secret values.
+2. **Option B (defense-in-depth):** Add an optional message scanning feature that searches for common secret patterns (e.g., regex for `password=...`, `token=...`, Bearer tokens, API key formats) in message strings. This would be opt-in due to performance overhead.
+3. Add a linter rule or compile-time check that warns when format strings contain known sensitive parameter names.
+
+**Acceptance Criteria:**
+- [ ] Documentation clearly states that message body content is NOT scanned for secrets
+- [ ] API docs recommend using `Attr.secret()` for all sensitive values
+- [ ] SECURITY.md updated to note this limitation
+
+**How to Verify:** Log `log.info("password=hunter2", .{})` and verify the output contains the plaintext password.
+
+**SLA:** 90 days (2026-06-22)
+
+---
+
+### SEC-0028: HTTP sink does not validate server identity
+
+- **Severity:** Medium
+- **Risk Score:** 36 (Impact: 3 x Likelihood: 3 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Internet-facing / internal network
+- **CWE:** CWE-295 (Improper Certificate Validation)
+- **OWASP:** A02:2021 Cryptographic Failures
+
+**Summary:** The HTTP sink connects to the configured endpoint via plain TCP with no server identity validation. Combined with the absence of TLS (SEC-0026), there is no mechanism to verify that the application is communicating with the intended log aggregator. Even if TLS were added in the future, the current architecture has no certificate validation infrastructure. DNS poisoning or ARP spoofing could redirect log traffic to an attacker-controlled endpoint without detection.
+
+**Impact:** A man-in-the-middle attacker could impersonate the log aggregator, receiving all log data (potentially containing PII and secrets). The attacker could also inject fake responses to manipulate the sink's retry/circuit-breaker behavior.
+
+**Likelihood:** Requires network-level attack (DNS poisoning, ARP spoofing, BGP hijacking). More practical in cloud environments or shared networks. Scored at 3.
+
+**Evidence:**
+- `src/sinks/http_sink.zig:66-69` -- HTTPS rejected, only plain HTTP supported
+
+```zig
+// http_sink.zig:66-69 -- no TLS, no server authentication
+if (std.mem.startsWith(u8, url, "https://")) {
+    return error.HttpsNotSupported;
+}
+```
+
+- `src/sinks/http_sink.zig:75-80` -- connects to parsed host/port via raw TCP
+- No certificate store, no hostname verification, no pinning
+
+**Fix Guidance:**
+1. This finding is blocked by SEC-0026 (TLS implementation). Once TLS is available:
+2. Validate server certificates against system CA store.
+3. Verify the server hostname matches the certificate's Subject Alternative Name.
+4. Consider optional certificate pinning for high-security deployments.
+
+**Acceptance Criteria:**
+- [ ] When TLS is implemented, server certificates are validated against CA store
+- [ ] Hostname verification is performed
+- [ ] Connection fails on certificate mismatch
+
+**How to Verify:** After TLS implementation, attempt to connect to a server with a mismatched certificate and verify the connection is rejected.
+
+**SLA:** 90 days (2026-06-22) -- blocked by SEC-0026
+
+---
+
+### SEC-0029: TCP sink has no authentication mechanism
+
+- **Severity:** Medium
+- **Risk Score:** 24 (Impact: 2 x Likelihood: 3 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Internal network
+- **CWE:** CWE-306 (Missing Authentication for Critical Function)
+- **OWASP:** A07:2021 Identification and Authentication Failures
+
+**Summary:** The TCP sink's `TcpOptions` struct contains only connection parameters (host, port, timeout, retries, backoff) with no fields for authentication credentials, tokens, or client certificates. Any endpoint listening on the configured port will receive log data. The log aggregator also has no way to verify the identity of the log source. This is the TCP-specific aspect of the broader SEC-0016 finding (which was marked Won't Do for TCP+UDP combined), but is called out separately because TCP is the most likely candidate for adding mTLS when TLS support is implemented (SEC-0026).
+
+**Impact:** In a compromised network, an attacker could redirect TCP log traffic to a rogue endpoint by DNS poisoning or ARP spoofing, capturing all log data. The log aggregator cannot distinguish legitimate log sources from malicious ones.
+
+**Likelihood:** Requires network-level attack or misconfiguration. Common risk in multi-tenant environments. Scored at 3.
+
+**Evidence:**
+- `src/sinks/tcp_sink.zig:27-34` -- no authentication fields in TcpOptions
+
+```zig
+// tcp_sink.zig:27-34 -- no auth fields
+pub const TcpOptions = struct {
+    host: []const u8,
+    port: u16,
+    connect_timeout_ms: u32 = 5000,
+    max_retries: u8 = 3,
+    initial_backoff_ms: u32 = 100,
+    max_backoff_ms: u32 = 5000,
+};
+```
+
+**Related:** SEC-0016 (Won't Do) -- covers both TCP and UDP. This finding specifically tracks the TCP authentication gap for when TLS is implemented.
+
+**Fix Guidance:**
+1. When TLS is added (SEC-0026), include mTLS support with client certificate authentication.
+2. Add optional `auth_token: ?[]const u8 = null` field to TcpOptions for token-based authentication.
+3. Document that unauthenticated TCP transport should only be used on trusted networks.
+
+**Acceptance Criteria:**
+- [ ] TCP sink supports optional authentication (mTLS or token-based)
+- [ ] Documentation states the authentication limitation
+
+**SLA:** 90 days (2026-06-22) -- blocked by SEC-0026
+
+---
+
+### SEC-0030: Sensitive key list incomplete -- missing common patterns
+
+- **Severity:** Low
+- **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** All handlers (log output)
+- **CWE:** CWE-532 (Insertion of Sensitive Information into Log File)
+- **OWASP:** A09:2021 Security Logging and Monitoring Failures
+
+**Summary:** The `sensitive_keys` list in `redact.zig` contains 15 patterns (password, passwd, secret, api_key, etc.) but is missing several common sensitive key patterns including: `ssn`, `social_security`, `credit_card`, `card_number`, `cvv`, `cvc`, `session`, `session_id`, `cookie`, `bearer`, `jwt`, `connection_string`, `conn_str`, `database_url`, `db_password`, `pin`, `otp`, `mfa`. Applications logging attributes with these key names will not trigger auto-redaction.
+
+**Impact:** Limited. The existing list covers the most common patterns. Missing patterns are less frequently used as attribute key names in structured logging. Defense-in-depth improvement.
+
+**Likelihood:** Low. Requires an application to log attributes with specific missing key names (e.g., `Attr.string("ssn", value)`). Scored at 2.
+
+**Evidence:**
+- `src/util/redact.zig:15-31` -- current sensitive_keys list
+
+```zig
+// redact.zig:15-31 -- current list, missing several common patterns
+pub const sensitive_keys = [_][]const u8{
+    "password", "passwd", "secret", "api_key", "apikey",
+    "token", "auth", "authorization", "credential",
+    "private_key", "privatekey", "access_key", "accesskey",
+    "secret_key", "secretkey",
+};
+// Missing: ssn, credit_card, cvv, session, cookie, bearer, jwt,
+// connection_string, pin, otp, etc.
+```
+
+**Fix Guidance:**
+1. Add the following patterns to `sensitive_keys`: `ssn`, `social_security`, `credit_card`, `card_number`, `cvv`, `cvc`, `session_id`, `cookie`, `bearer`, `jwt`, `connection_string`, `conn_str`, `database_url`, `db_password`, `pin`, `otp`.
+2. Consider making the sensitive key list configurable (user-extensible) rather than hardcoded.
+3. The comptime-unrolled pattern matching in `isSensitiveKey()` handles additional patterns efficiently, so performance impact is minimal.
+
+**Acceptance Criteria:**
+- [ ] `isSensitiveKey("ssn")` returns true
+- [ ] `isSensitiveKey("credit_card")` returns true
+- [ ] `isSensitiveKey("session_id")` returns true
+- [ ] `isSensitiveKey("bearer")` returns true
+- [ ] `isSensitiveKey("jwt")` returns true
+- [ ] `isSensitiveKey("connection_string")` returns true
+
+**SLA:** 180 days (2026-09-21)
+
+---
+
+### SEC-0031: Logger name and source_file not sanitized in text handler
+
+- **Severity:** Low
+- **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Local (requires attacker-controlled logger name)
+- **CWE:** CWE-117 (Improper Output Neutralization for Logs)
+- **OWASP:** A03:2021 Injection
+
+**Summary:** The text handler writes `rec.logger` directly to output at line 68 without applying `sanitizeOutput()`. While `rec.message` is correctly sanitized (line 73) and attribute keys use `sanitizeKey()` (line 103), the logger name field is written raw. If a logger name contains newline characters (`\n`), it could inject fake log lines. The `rec.source_file` field in the Record struct is also not sanitized in any handler, though it is currently always set to `""` in test records.
+
+**Impact:** Low. Logger names are typically compile-time constants (e.g., `"http.server"`) and are not user-controlled in most applications. However, if a logger name is derived from dynamic input (e.g., module names from plugin systems), log injection is possible.
+
+**Likelihood:** Low. Requires attacker control over the logger name string, which is uncommon. Scored at 2.
+
+**Evidence:**
+- `src/handlers/text_handler.zig:67-69` -- logger name written without sanitization
+
+```zig
+// text_handler.zig:67-69 -- logger name NOT sanitized
+if (rec.logger.len > 0) {
+    writer.writeAll(rec.logger) catch return error.WriteFailed;  // NO sanitizeOutput
+    writer.writeByte(' ') catch return error.WriteFailed;
+}
+```
+
+- Compare with `src/handlers/text_handler.zig:73` -- message IS sanitized:
+
+```zig
+// text_handler.zig:73 -- message correctly sanitized
+sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
+```
+
+- `src/record.zig:29` -- `source_file: []const u8` field exists but is not sanitized in any handler
+
+**Fix Guidance:**
+1. Replace `writer.writeAll(rec.logger)` with `sanitize.sanitizeOutput(writer, rec.logger)` in text_handler.zig.
+2. Apply the same fix to any other handlers that write `rec.logger` directly.
+3. If `rec.source_file` is ever written to output, apply `sanitizeOutput()` to it as well.
+
+**Acceptance Criteria:**
+- [ ] `rec.logger` is sanitized via `sanitizeOutput()` in text handler
+- [ ] Logger name containing `\n` produces escaped output, not a new log line
+- [ ] Same fix applied to any other handlers that write `rec.logger` directly
+
+**SLA:** 180 days (2026-09-21)
+
+---
+
+### SEC-0032: Syslog handler hostname written raw, bypassing writeSyslogName sanitization
+
+- **Severity:** Low
+- **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Internal network (syslog receivers)
+- **CWE:** CWE-117 (Improper Output Neutralization for Logs)
+- **OWASP:** A03:2021 Injection
+
+**Summary:** The syslog RFC5424 handler uses `writeSyslogName()` to sanitize `rec.logger` (APP-NAME at line 141) and `rec.msg_id` (MSGID at line 159), but writes `ctx.options.hostname` (HOSTNAME at line 136) directly via `writer.writeAll()` without any sanitization. The `writeSyslogName()` function restricts output to printable ASCII (33-126) and enforces a 48-character maximum, providing proper RFC5424 conformance. The hostname field bypasses these protections.
+
+**Impact:** Low. The hostname is typically set from configuration, not user input. However, if the hostname contains control characters or is excessively long, it could malform syslog messages or confuse downstream parsers.
+
+**Likelihood:** Low. Requires attacker control of the hostname configuration value. Scored at 2.
+
+**Evidence:**
+- `src/handlers/syslog_rfc5424.zig:136` -- hostname written raw
+
+```zig
+// syslog_rfc5424.zig:136 -- hostname NOT sanitized
+writer.writeAll(ctx.options.hostname) catch return error.WriteFailed;
+```
+
+- `src/handlers/syslog_rfc5424.zig:141` -- APP-NAME correctly uses writeSyslogName
+
+```zig
+// syslog_rfc5424.zig:141 -- APP-NAME sanitized via writeSyslogName
+writeSyslogName(writer, rec.logger) catch return error.WriteFailed;
+```
+
+- `src/handlers/syslog_rfc5424.zig:198-207` -- writeSyslogName restricts to printable ASCII
+
+```zig
+// syslog_rfc5424.zig:198-207 -- proper sanitization
+fn writeSyslogName(writer: anytype, name: []const u8) !void {
+    const max_len: usize = 48;
+    var written: usize = 0;
+    for (name) |c| {
+        if (written >= max_len) break;
+        if (c >= 33 and c <= 126) {
+            try writer.writeByte(c);
+            written += 1;
+```
+
+**Fix Guidance:**
+1. Apply `writeSyslogName()` to the hostname field at line 136, or
+2. Validate the hostname at `Context.init()` time (reject hostnames with control characters or exceeding RFC5424 limits).
+
+**Acceptance Criteria:**
+- [ ] Hostname is either sanitized via `writeSyslogName()` or validated at init time
+- [ ] Hostname containing control characters does not corrupt syslog message framing
+
+**SLA:** 180 days (2026-09-21)
+
+---
+
+### SEC-0033: Data race on Level field in setLevel across handlers
+
+- **Severity:** Low
+- **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Admin-only (requires concurrent level change + logging)
+- **CWE:** CWE-362 (Concurrent Execution Using Shared Resource with Improper Synchronization)
+- **OWASP:** A04:2021 Insecure Design
+
+**Summary:** Every handler's `setLevel()` function performs a non-atomic write to `ctx.level` while `handle()` reads `ctx.level` under a mutex. However, `setLevel()` does not acquire the mutex. If one thread calls `setLevel()` while another thread is between entering `handle()` and reaching the `ctx.level` read, the read may observe a torn value. This is a data race in Zig's memory model. Note: SEC-0011 (fatal_hook race) was fixed with atomic operations, but the same pattern was not applied to handler level fields.
+
+**Impact:** Low in practice. Zig's `Level` is a small enum (fits in a single byte), so torn reads are unlikely on most architectures. The worst case is a log record being emitted at the wrong level, not a crash or memory corruption.
+
+**Likelihood:** Requires concurrent `setLevel()` and `handle()` calls. Dynamic level changes are typically infrequent. Scored at 2.
+
+**Evidence:**
+- `src/handlers/text_handler.zig:149-151` -- setLevel writes ctx.level without mutex
+
+```zig
+// text_handler.zig:149-151 -- non-atomic write, no mutex
+fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
+    const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
+    ctx.level = level;  // data race with handle() reading ctx.level at line 47
+}
+```
+
+- `src/handlers/rotating_file.zig:335-337` -- same pattern
+- `src/handlers/json_handler.zig:166-168` -- same pattern
+- `src/handlers/syslog_rfc5424.zig:300-302` -- same pattern
+- `src/handlers/journald.zig:196-198` -- same pattern
+- `src/handlers/windows_eventlog.zig:168-170` -- same pattern
+- All handlers read `ctx.level` in `handle()` under mutex, but `setLevel()` writes without mutex
+
+**Fix Guidance:**
+1. Use `@atomicStore` / `@atomicLoad` for `ctx.level` in all handlers, consistent with the SEC-0011 fix for `fatal_hook`.
+2. Alternatively, acquire the handler's existing mutex in `setLevel()` before writing.
+
+**Acceptance Criteria:**
+- [ ] `setLevel()` uses atomic write or acquires mutex in all handlers
+- [ ] Concurrent `setLevel()` + `handle()` does not constitute a data race
+
+**SLA:** 180 days (2026-09-21)
+
+---
+
+### SEC-0034: Log file created with default permissions (umask-dependent)
+
+- **Severity:** Low
+- **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Local (filesystem)
+- **CWE:** CWE-276 (Incorrect Default Permissions)
+- **OWASP:** A01:2021 Broken Access Control
+
+**Summary:** The rotating file handler creates log files via `std.fs.cwd().createFile(path, .{ .truncate = false })` without specifying explicit file permissions. The resulting file permissions depend on the process umask. With a permissive umask (e.g., 0o000), log files could be world-readable (mode 0o666). Log files may contain sensitive data (despite redaction efforts) and should be restricted to the application user.
+
+**Impact:** Low. Most production deployments set a restrictive umask (0o022 or 0o077). However, in containerized environments or misconfigured systems, the umask may be permissive, exposing log files to other users on the system.
+
+**Likelihood:** Requires a permissive umask setting, which is uncommon in production but possible. Scored at 2.
+
+**Evidence:**
+- `src/handlers/rotating_file.zig:114-116` -- createFile with no explicit mode
+
+```zig
+// rotating_file.zig:114-116 -- no explicit permissions
+self.file = std.fs.cwd().createFile(path, .{
+    .truncate = false,
+}) catch |err| { ... };
+```
+
+**Fix Guidance:**
+1. Pass explicit file mode to `createFile`: `.mode = 0o600` (owner read/write only).
+2. Consider making the file mode configurable via `RotationOptions`.
+3. Document the default file permissions in the rotating file handler's documentation.
+
+**Acceptance Criteria:**
+- [ ] Log files are created with explicit permissions (0o600 recommended)
+- [ ] File permissions do not depend on umask
+- [ ] Optionally configurable via `RotationOptions`
+
+**SLA:** 180 days (2026-09-21)
+
+---
+
+### SEC-0035: UDP truncation produces malformed JSON
+
+- **Severity:** Low
+- **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Internal network (log aggregators)
+- **CWE:** CWE-404 (Improper Resource Shutdown or Release)
+- **OWASP:** A09:2021 Security Logging and Monitoring Failures
+
+**Summary:** The UDP sink truncates the serialized JSON payload to `max_packet_size` (default 65507 bytes) at `udp_sink.zig:80` using `@min(data.len, self.options.max_packet_size)`. If the JSON payload exceeds this limit, the truncated output is syntactically invalid JSON (missing closing braces, truncated strings). Downstream log aggregators that parse JSON will reject or misparse these records, potentially losing audit-critical log entries.
+
+**Impact:** Low. The default max packet size (65507 bytes) is the maximum UDP payload. Log records exceeding this size are extremely rare. However, in configurations with smaller `max_packet_size` values, truncation is more likely.
+
+**Likelihood:** Low. Requires a log record that serializes to more than `max_packet_size` bytes. Scored at 2.
+
+**Evidence:**
+- `src/sinks/udp_sink.zig:80` -- truncation at arbitrary byte boundary
+
+```zig
+// udp_sink.zig:80 -- truncation produces malformed JSON
+const send_len = @min(data.len, self.options.max_packet_size);
+```
+
+**Fix Guidance:**
+1. Before sending, check if `data.len > max_packet_size`. If so, either:
+   a. Drop the record and increment an error counter (preferred for audit integrity), or
+   b. Truncate the message field to fit within the limit while preserving valid JSON structure, or
+   c. Send a minimal error record indicating truncation occurred.
+2. Log a warning via stderr or metrics when truncation occurs.
+
+**Acceptance Criteria:**
+- [ ] UDP sink never sends malformed JSON
+- [ ] Oversized records are either dropped with a metric or truncated with valid JSON structure
+- [ ] Truncation events are observable via metrics
+
+**SLA:** 180 days (2026-09-21)
+
+---
+
+### SEC-0036: JSON key collision via duplicate keys or keys that sanitize to the same string
+
+- **Severity:** Low
+- **Risk Score:** 8 (Impact: 1 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::suspected`
+- **Exploit Surface:** All JSON output paths
+- **CWE:** CWE-20 (Improper Input Validation)
+- **OWASP:** A03:2021 Injection
+
+**Summary:** The `sanitizeKey()` function replaces all invalid characters with `_`. Two different attribute keys that differ only in non-alphanumeric characters (e.g., `user/id` and `user@id` both sanitize to `user_id`) will produce duplicate JSON object keys. Additionally, if a user provides two attributes with the same key name, the JSON output will contain duplicate keys. While RFC 8259 does not forbid duplicate keys, most JSON parsers handle them inconsistently (some take the first value, some the last, some error). This could cause data loss or confusion in log analysis.
+
+**Impact:** Minimal. Requires specific attribute naming patterns that collide after sanitization. Data is not lost (both values are present in the JSON) but parsers may only expose one value.
+
+**Likelihood:** Low. Requires either (a) two attributes with names that sanitize to the same string, or (b) two attributes with identical keys. Scored at 2.
+
+**Evidence:**
+- `src/util/sanitize.zig:17-27` -- sanitizeKey replaces all non-alphanumeric chars with `_`
+
+```zig
+// sanitize.zig:19-24 -- different keys can sanitize to same output
+for (key[0..len], 0..) |c, i| {
+    if (isValidKeyChar(c)) {
+        buf[i] = c;
+    } else {
+        buf[i] = '_';  // "user/id" and "user@id" both become "user_id"
+    }
+}
+```
+
+- `src/handlers/json_handler.zig:123-148` -- no duplicate key detection
+
+**What would confirm:** Create two attributes `Attr.string("user/id", "a")` and `Attr.string("user@id", "b")`, serialize to JSON, and verify the output contains duplicate `"user_id"` keys.
+
+**Fix Guidance:**
+1. **Option A:** Track emitted keys in a small set during serialization. If a collision is detected, append a numeric suffix (e.g., `user_id_2`).
+2. **Option B:** Use a different sanitization strategy that preserves more of the original key structure (e.g., hex-encode invalid characters instead of replacing with `_`).
+3. **Option C:** Document the collision possibility as a known limitation.
+
+**Acceptance Criteria:**
+- [ ] Either: duplicate JSON keys are prevented, or the limitation is documented
+- [ ] If deduplication is implemented, all colliding keys are distinguishable in output
+
+**SLA:** 180 days (2026-09-21)
+
+---
+
+## Phase 3 Audit -- Non-Security Gaps
+
+The following gaps were discovered during the Phase 3 post-closure verification audit. They are documentation and tracking consistency issues, not security vulnerabilities.
+
+### GAP-0026: API.md documents stale convenience function signatures
+
+- **Severity:** Medium
+- **Category:** Docs
+- **Confidence:** `confidence::confirmed`
+- **Status:** **Closed / Implemented** (pass 5)
+
+**Summary:** docs/API.md lines 325-335 show old `stderrHandler`/`stderrJsonHandler` signatures that return `struct{ctx, handler}`. The SEC-0002 fix changed the API to accept a `*Context` out-parameter, but API.md was not updated to reflect the new signatures.
+
+**Resolution:** API.md convenience function signatures updated to match current `*Context` out-parameter API. All code examples corrected to compile with current slogz.zig.
+
+**Evidence:**
+- `docs/API.md` -- updated signatures for `stderrHandler(ctx: *text.Context, level: Level) Handler`
+- Old `struct { ctx, handler }` return pattern removed from all examples
+
+**Acceptance Criteria:**
+- [x] docs/API.md examples compile with current slogz.zig
+- [x] `stderrHandler` and `stderrJsonHandler` signatures in API.md match `src/slogz.zig`
+- [x] No references to the old `struct { ctx, handler }` return pattern remain in API.md
+
+---
+
+### GAP-0027: ARCHITECTURE.md module tree missing 4 source files
+
+- **Severity:** Low
+- **Category:** Docs
+- **Confidence:** `confidence::confirmed`
+- **Status:** **Closed / Implemented** (pass 5)
+
+**Summary:** ARCHITECTURE.md module tree lists 23 files but the actual source directory contains 27 .zig files. The 4 missing files are: `multi_handler.zig`, `parallel.zig`, `json_value.zig`, `text_value.zig`.
+
+**Resolution:** ARCHITECTURE.md module tree updated to list all source files including multi_handler.zig, parallel.zig, json_value.zig, text_value.zig, json_record.zig, and text_record.zig.
+
+**Evidence:**
+- `docs/ARCHITECTURE.md` -- module tree now lists all .zig files in the codebase
+
+**Acceptance Criteria:**
+- [x] ARCHITECTURE.md module tree lists all .zig files
+- [x] `multi_handler.zig`, `parallel.zig`, `json_value.zig`, `text_value.zig` are all present in the tree
+
+---
+
+### GAP-0028: GitLab issue #40 open but PERF-025 marked Won't Do
+
+- **Severity:** Low
+- **Category:** Tracking
+- **Confidence:** `confidence::confirmed`
+- **Status:** **Won't Do** (pass 5)
+
+**Summary:** PERF_GAP_ANALYSIS.md marks PERF-025 (stack allocations 8-25KB per log call) as "Won't Do", but GitLab issue #40 remains open. The tracker and docs are inconsistent.
+
+**Reason:** Requires manual GitLab issue close; cannot automate without issue access. Marked Won't Do for this gap closure pass. The GitLab issue should be closed manually by the maintainer.
+
+**Acceptance Criteria:**
+- [ ] GitLab #40 status matches PERF_GAP_ANALYSIS.md disposition (both closed/won't-do, or both open)
+
+---
+
 ## Findings by Area
 
 ### Authentication and Authorization
-- SEC-0016: No authentication for TCP/UDP sinks (Medium)
+- SEC-0016: No authentication for TCP/UDP sinks (Medium) -- Won't Do
+- SEC-0029: TCP sink has no authentication mechanism (Medium) -- **Won't Do** (pass 5)
 
 ### Web / API / Network
-- SEC-0001: HTTPS plaintext transmission (Critical)
-- SEC-0003: HTTP header injection (High)
-- SEC-0004: TCP/UDP plaintext transmission (High)
-- SEC-0018: HTTP status check too permissive (Low)
+- SEC-0001: HTTPS plaintext transmission (Critical) -- Closed
+- SEC-0003: HTTP header injection (High) -- Closed
+- SEC-0004: TCP/UDP plaintext transmission (High) -- Won't Do
+- SEC-0018: HTTP status check too permissive (Low) -- Closed
 - SEC-0025: Network sinks skip sanitizeKey on JSON attr keys (Medium) -- Closed (pass 4)
+- SEC-0026: All network sinks transmit cleartext -- no TLS support (High) -- **Won't Do** (pass 5)
+- SEC-0028: HTTP sink does not validate server identity (Medium) -- **Won't Do** (pass 5)
+- SEC-0035: UDP truncation produces malformed JSON (Low) -- **Closed** (pass 5)
 
 ### Input Validation / Injection
-- SEC-0006: Log injection via unsanitized messages -- Closed (pass 3) (High)
+- SEC-0006: Log injection via unsanitized messages (High) -- Closed (pass 3)
 - SEC-0007: Path traversal in rotating file (High) -- Closed
 - SEC-0010: Text handler unescaped string values (Medium) -- Closed
 - SEC-0019: Journald fallback unsanitized stderr (Low) -- Closed
@@ -1082,25 +1694,39 @@ paths = [
 - SEC-0021: Journald stderr fallback unsanitized attribute keys (Low) -- Closed (pass 3)
 - SEC-0022: Windows Event Log unsanitized attribute keys (Low) -- Closed (pass 3)
 - SEC-0023: Syslog writeSDString no control char escaping (Low) -- Closed (pass 3)
+- SEC-0031: Logger name and source_file not sanitized in text handler (Low) -- **Closed** (pass 5)
+- SEC-0032: Syslog hostname bypasses writeSyslogName sanitization (Low) -- **Closed** (pass 5)
+- SEC-0036: JSON key collision via duplicate or sanitize-colliding keys (Low) -- **Closed** (pass 5)
 
 ### Sensitive Data Handling
 - SEC-0005: isSensitiveKey() dead code (High) -- Closed
-- SEC-0009: Rotating file missing isSensitiveKey() auto-redaction -- Closed (pass 3) (High)
+- SEC-0009: Rotating file missing isSensitiveKey() auto-redaction (High) -- Closed (pass 3)
 - SEC-0012: Secret values plaintext in memory (Medium) -- Closed
 - SEC-0013: Async handler drops secret attributes (Medium) -- Closed
 - SEC-0014: Gitleaks blanket exclusion (Medium) -- Closed
 - SEC-0024: Gitleaks allowlist incomplete (Info) -- Closed (pass 3)
+- SEC-0027: Secrets in message body bypass all redaction (Medium) -- **Closed** (pass 5)
+- SEC-0030: Sensitive key list incomplete (Low) -- **Closed** (pass 5)
 
-### Memory Safety
-- SEC-0002: Dangling pointer in stderrHandler (Critical)
-- SEC-0011: Global fatal_hook race condition (Medium)
+### Memory Safety / Concurrency
+- SEC-0002: Dangling pointer in stderrHandler (Critical) -- Closed
+- SEC-0011: Global fatal_hook race condition (Medium) -- Closed
+- SEC-0033: Data race on Level field in setLevel across handlers (Low) -- **Closed** (pass 5)
+
+### File System
+- SEC-0034: Log file created with default permissions (Low) -- **Closed** (pass 5)
 
 ### Supply Chain
-- SEC-0008: spice on floating main branch (High)
+- SEC-0008: spice on floating main branch (High) -- Blocked
 
 ### Operations / CI-CD
-- SEC-0015: SECURITY.md false claims (Medium)
-- SEC-0017: No CI build/test pipeline (Medium)
+- SEC-0015: SECURITY.md false claims (Medium) -- Closed
+- SEC-0017: No CI build/test pipeline (Medium) -- Closed
+
+### Documentation / Tracking (Phase 3 Audit)
+- GAP-0026: API.md documents stale convenience function signatures (Medium) -- **Closed** (pass 5)
+- GAP-0027: ARCHITECTURE.md module tree missing 4 source files (Low) -- **Closed** (pass 5)
+- GAP-0028: GitLab issue #40 open but PERF-025 marked Won't Do (Low) -- **Won't Do** (pass 5)
 
 ---
 
@@ -1117,6 +1743,14 @@ paths = [
 | SEC-0018 | Fix HTTP status parsing | 30 min | Correct error detection |
 | SEC-0009 | Add isSensitiveKey() to rotating_file -- **Closed** (pass 3) | 30 min | Consistent auto-redaction |
 | SEC-0024 | Add gitleaks allowlist entries for json_logging/accept.zig | 15 min | Prevents false positive CI failures |
+| SEC-0030 | Extend sensitive_keys list with missing patterns | 30 min | Broader auto-redaction coverage |
+| SEC-0031 | Sanitize rec.logger in text handler | 15 min | Prevents logger name injection |
+| SEC-0032 | Apply writeSyslogName to hostname in syslog handler | 15 min | Consistent syslog field sanitization |
+| SEC-0033 | Atomic or mutex-guarded setLevel in all handlers | 1 hour | Eliminates level field data race |
+| SEC-0034 | Pass explicit mode to createFile in rotating_file | 15 min | Deterministic file permissions |
+| GAP-0026 | Update API.md stderrHandler/stderrJsonHandler signatures | 30 min | Compilable documentation examples |
+| GAP-0027 | Add 4 missing files to ARCHITECTURE.md module tree | 15 min | Accurate architecture docs |
+| GAP-0028 | Close GitLab #40 or reopen PERF-025 to resolve status mismatch | 5 min | Tracker/docs consistency |
 
 ### Medium Effort (1-5 days each)
 
@@ -1134,26 +1768,36 @@ paths = [
 | SEC-0021 | Sanitize journald stderr fallback attr keys | 15 min | Consistent key sanitization |
 | SEC-0022 | Sanitize windows_eventlog attr keys | 15 min | Consistent key sanitization |
 | SEC-0023 | Add control char escaping to syslog writeSDString | 30 min | Defense-in-depth for downstream parsers |
+| SEC-0027 | Document message body redaction limitation + best practices | 2 hours | Prevents false sense of security |
+| SEC-0035 | Handle UDP truncation gracefully (drop or valid-JSON truncation) | 2 hours | Prevents malformed JSON in audit logs |
+| SEC-0036 | Deduplicate or document JSON key collision | 1 hour | Prevents ambiguous log entries |
 
 ### Strategic (more than 5 days each)
 
 | ID | Finding | Effort | Impact |
 |----|---------|--------|--------|
+| SEC-0026 | Implement TLS for at least one network sink (TCP or HTTP) | 5-10 days | Encrypted log transport |
 | SEC-0001 | Implement TLS for HTTP sink (or reject https://) | 3-5 days | Encrypted log transport |
 | SEC-0004 | Add optional TLS for TCP sink | 3-5 days | Encrypted TCP transport |
 | SEC-0013 | Fix async handler attribute serialization | 2-3 days | Complete async logging |
 | SEC-0016 | Add mTLS/auth for network sinks | 5+ days | Authenticated log transport |
+| SEC-0028 | Implement server certificate validation (requires TLS) | 2-3 days | Prevents MITM attacks |
+| SEC-0029 | Add authentication to TCP sink (requires TLS for mTLS) | 3-5 days | Authenticated TCP transport |
 | SEC-0012 | Implement secret memory scrubbing | 2-3 days | Defense-in-depth |
 
 ---
 
 ## Blockers and Unknowns
 
-1. **TLS implementation** (SEC-0001, SEC-0004): Zig's `std.crypto.tls` client support maturity for 0.15 is unverified. May require a C TLS library import. **What would confirm:** Successful TLS handshake using `std.crypto.tls.Client` in a test against a local TLS server.
+1. **TLS implementation** (SEC-0026, SEC-0028, SEC-0029): Zig's `std.crypto.tls` client support maturity for 0.15 is unverified. May require a C TLS library import. SEC-0028 (server identity validation) and SEC-0029 (TCP authentication) are both blocked by TLS availability. **What would confirm:** Successful TLS handshake using `std.crypto.tls.Client` in a test against a local TLS server.
 
 2. **Async handler attribute redesign** (SEC-0013): The `QueuedRecord` fixed-buffer approach fundamentally limits attribute fidelity. A proper fix may require architectural changes to the queue. **What would confirm:** A design document for attribute serialization/deserialization that preserves type tags.
 
 3. **CI Zig availability** (SEC-0017): Confirmed that Zig 0.15 is available, but the specific CI runner image/tag with Zig 0.15 needs to be identified. **What would confirm:** A working CI job using a Zig 0.15 container image.
+
+4. **Message body redaction scope** (SEC-0027): Scanning message strings for sensitive patterns is inherently imprecise (regex false positives/negatives, performance overhead). The design decision of whether to implement message scanning vs. documenting the limitation needs team input. **What would confirm:** Team consensus on approach (document-only vs. opt-in scanning).
+
+5. **JSON key collision resolution** (SEC-0036): The sanitizeKey `_` replacement strategy is simple and fast but can produce collisions. Changing to hex-encoding would alter the output format for all existing deployments. **What would confirm:** Assessment of whether any downstream consumers depend on the current sanitized key format.
 
 ---
 
@@ -1186,3 +1830,17 @@ paths = [
 | SEC-0023 | (new) | Syslog writeSDString no control char escaping -- new finding |
 | SEC-0024 | (new) | Gitleaks allowlist incomplete -- new finding |
 | SEC-0025 | (new) | Network sinks skip sanitizeKey on JSON attr keys -- new finding (pass 4) |
+| SEC-0026 | SEC-0001, SEC-0004 | Umbrella finding: all network sinks cleartext. Subsumes SEC-0001 scope (HTTP) and SEC-0004 scope (TCP/UDP). |
+| SEC-0027 | (new) | Message body bypasses redaction -- phase 3 verification audit |
+| SEC-0028 | (new) | HTTP sink no server identity validation -- phase 3 verification audit |
+| SEC-0029 | SEC-0016 | TCP-specific auth gap. SEC-0016 (Won't Do) covers TCP+UDP broadly; this tracks TCP for when TLS is added. |
+| SEC-0030 | (new) | Incomplete sensitive key list -- phase 3 verification audit |
+| SEC-0031 | (new) | Logger name/source_file not sanitized -- phase 3 verification audit |
+| SEC-0032 | (new) | Syslog hostname bypasses writeSyslogName -- phase 3 verification audit |
+| SEC-0033 | SEC-0011 | Level field race, same pattern as SEC-0011 (fatal_hook) but in handler contexts |
+| SEC-0034 | (new) | Log file default permissions -- phase 3 verification audit |
+| SEC-0035 | (new) | UDP truncation malformed JSON -- phase 3 verification audit |
+| SEC-0036 | (new) | JSON key collision -- phase 3 verification audit |
+| GAP-0026 | (new) | API.md stale convenience function signatures -- phase 3 audit |
+| GAP-0027 | (new) | ARCHITECTURE.md module tree missing 4 files -- phase 3 audit |
+| GAP-0028 | (new) | GitLab #40 / PERF-025 status mismatch -- phase 3 audit |

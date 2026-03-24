@@ -11,6 +11,7 @@ const Level = @import("level.zig").Level;
 const Attr = @import("value.zig").Attr;
 const Record = @import("record.zig").Record;
 const RecordError = @import("record.zig").RecordError;
+const MAX_ATTRS = @import("record.zig").MAX_ATTRS;
 const Handler = @import("handler.zig").Handler;
 const HandlerError = @import("handler.zig").HandlerError;
 const Clock = @import("internal/clock.zig").Clock;
@@ -186,6 +187,16 @@ pub const Logger = struct {
         else
             msg_id;
 
+        // Merge context_attrs with record attrs if context_attrs are present
+        var combined_buf: [MAX_ATTRS]Attr = undefined;
+        const effective_attrs = if (self.context_attrs.len > 0) blk: {
+            const total = self.context_attrs.len + attrs.len;
+            if (total > MAX_ATTRS) break :blk attrs; // fallback: too many
+            @memcpy(combined_buf[0..self.context_attrs.len], self.context_attrs);
+            @memcpy(combined_buf[self.context_attrs.len..][0..attrs.len], attrs);
+            break :blk combined_buf[0..total];
+        } else attrs;
+
         const rec = Record{
             .time_utc_us = self.clock.now(),
             .level = level,
@@ -194,7 +205,7 @@ pub const Logger = struct {
             .logger = self.getName(),
             .source_file = "",
             .source_line = 0,
-            .attrs = attrs,
+            .attrs = effective_attrs,
         };
 
         // Check limits
@@ -224,6 +235,16 @@ pub const Logger = struct {
         else
             msg_id;
 
+        // Merge context_attrs with record attrs if context_attrs are present
+        var combined_buf: [MAX_ATTRS]Attr = undefined;
+        const effective_attrs = if (self.context_attrs.len > 0) blk: {
+            const total = self.context_attrs.len + attrs.len;
+            if (total > MAX_ATTRS) break :blk attrs; // fallback: too many
+            @memcpy(combined_buf[0..self.context_attrs.len], self.context_attrs);
+            @memcpy(combined_buf[self.context_attrs.len..][0..attrs.len], attrs);
+            break :blk combined_buf[0..total];
+        } else attrs;
+
         const rec = Record{
             .time_utc_us = self.clock.now(),
             .level = level,
@@ -232,7 +253,7 @@ pub const Logger = struct {
             .logger = self.getName(),
             .source_file = src.file,
             .source_line = src.line,
-            .attrs = attrs,
+            .attrs = effective_attrs,
         };
 
         if (rec.hasTooManyAttrs()) return error.TooManyAttrs;
@@ -361,4 +382,63 @@ test "fatal_hook uses atomic access" {
 
     // Restore original hook.
     setFatalHook(original);
+}
+
+test "Logger.with context attrs appear in output" {
+    const text_handler = @import("handlers/text_handler.zig");
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = text_handler.Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = text_handler.init(&ctx);
+
+    const base_logger = Logger.init(handler, .info, Clock.system());
+
+    // Create a child logger with context attrs
+    const child_logger = base_logger.with(&.{
+        Attr.string("service", "auth"),
+        Attr.int("version", 2),
+    });
+
+    // Log a message with per-record attrs
+    try child_logger.info("request.handled", &.{
+        Attr.int("status", 200),
+    });
+
+    const output = fbs.getWritten();
+
+    // Context attrs should appear in output
+    try std.testing.expect(std.mem.indexOf(u8, output, "service=auth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "version=2") != null);
+    // Per-record attrs should also appear
+    try std.testing.expect(std.mem.indexOf(u8, output, "status=200") != null);
+    // Context attrs should come before record attrs
+    const service_pos = std.mem.indexOf(u8, output, "service=auth").?;
+    const status_pos = std.mem.indexOf(u8, output, "status=200").?;
+    try std.testing.expect(service_pos < status_pos);
+}
+
+test "Logger.with context attrs appear in JSON output" {
+    const json_handler = @import("handlers/json_handler.zig");
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = json_handler.Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = json_handler.init(&ctx);
+
+    const base_logger = Logger.init(handler, .info, Clock.system());
+    const child_logger = base_logger.with(&.{
+        Attr.string("env", "prod"),
+    });
+
+    try child_logger.info("deploy.started", &.{
+        Attr.string("app", "web"),
+    });
+
+    const output = fbs.getWritten();
+
+    // Context attr should appear in JSON output
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"env\":\"prod\"") != null);
+    // Per-record attr should also appear
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"app\":\"web\"") != null);
 }

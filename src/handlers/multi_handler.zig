@@ -18,10 +18,10 @@ const HandlerError = @import("../handler.zig").HandlerError;
 /// Multi-handler context holding a slice of child handlers.
 pub const Context = struct {
     handlers: []const Handler,
-    level: Level,
+    level: std.atomic.Value(i32),
 
     pub fn init(handlers: []const Handler, level: Level) Context {
-        return .{ .handlers = handlers, .level = level };
+        return .{ .handlers = handlers, .level = std.atomic.Value(i32).init(@intFromEnum(level)) };
     }
 
     pub fn deinit(_: *Context) void {}
@@ -30,7 +30,8 @@ pub const Context = struct {
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    if (!rec.level.atLeast(ctx.level)) return;
+    const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
+    if (!rec.level.atLeast(current_level)) return;
 
     var first_err: ?HandlerError = null;
     for (ctx.handlers) |h| {
@@ -58,7 +59,7 @@ fn withGroup(ctx_ptr: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.level = level;
+    ctx.level.store(@intFromEnum(level), .release);
 
     for (ctx.handlers) |h| {
         h.setLevel(level);
@@ -80,7 +81,7 @@ fn flush(ctx_ptr: *anyopaque, timeout_ms: u32) HandlerError!void {
 
 fn getLevel(ctx_ptr: *anyopaque) Level {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    return ctx.level;
+    return @enumFromInt(ctx.level.load(.acquire));
 }
 
 fn close(ctx_ptr: *anyopaque) void {

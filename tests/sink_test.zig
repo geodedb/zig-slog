@@ -35,7 +35,7 @@ test "TcpSink - context initialization" {
     try std.testing.expectEqualStrings("127.0.0.1", ctx.options.host);
     try std.testing.expectEqual(@as(u16, 5514), ctx.options.port);
     try std.testing.expectEqual(@as(u8, 3), ctx.options.max_retries);
-    try std.testing.expectEqual(Level.info, ctx.level);
+    try std.testing.expectEqual(@intFromEnum(Level.info), ctx.level.load(.acquire));
 }
 
 test "TcpSink - handler initialization" {
@@ -68,7 +68,7 @@ test "TcpSink - level change" {
     const handler = tcp.init(&ctx);
     handler.setLevel(.@"error");
 
-    try std.testing.expectEqual(Level.@"error", ctx.level);
+    try std.testing.expectEqual(@intFromEnum(Level.@"error"), ctx.level.load(.acquire));
 }
 
 test "TcpSink - default options" {
@@ -136,7 +136,7 @@ test "UdpSink - context initialization" {
     try std.testing.expectEqualStrings("127.0.0.1", ctx.options.host);
     try std.testing.expectEqual(@as(u16, 5514), ctx.options.port);
     try std.testing.expectEqual(@as(usize, 1500), ctx.options.max_packet_size);
-    try std.testing.expectEqual(Level.debug, ctx.level);
+    try std.testing.expectEqual(@intFromEnum(Level.debug), ctx.level.load(.acquire));
 }
 
 test "UdpSink - default max packet size" {
@@ -182,7 +182,7 @@ test "UdpSink - level change" {
     const handler = udp.init(&ctx);
     handler.setLevel(.trace);
 
-    try std.testing.expectEqual(Level.trace, ctx.level);
+    try std.testing.expectEqual(@intFromEnum(Level.trace), ctx.level.load(.acquire));
 }
 
 test "UdpSink - flush does nothing" {
@@ -335,7 +335,7 @@ test "HttpSink - level change" {
     const handler = http.init(&ctx);
     handler.setLevel(.fatal);
 
-    try std.testing.expectEqual(Level.fatal, ctx.level);
+    try std.testing.expectEqual(@intFromEnum(Level.fatal), ctx.level.load(.acquire));
 }
 
 test "HttpSink - withAttrs returns handler" {

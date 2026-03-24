@@ -54,7 +54,7 @@ pub const Context = struct {
     queue: BoundedQueue(QueuedRecord),
     drop_oldest: bool,
     block_timeout_ms: u32,
-    level: Level,
+    level: std.atomic.Value(i32),
     running: std.atomic.Value(bool),
     thread: ?std.Thread,
 
@@ -67,7 +67,7 @@ pub const Context = struct {
             .queue = try BoundedQueue(QueuedRecord).init(allocator, options.queue_size),
             .drop_oldest = options.drop_oldest,
             .block_timeout_ms = options.block_timeout_ms,
-            .level = .info,
+            .level = std.atomic.Value(i32).init(@intFromEnum(Level.info)),
             .running = std.atomic.Value(bool).init(true),
             .thread = null,
         };
@@ -155,12 +155,16 @@ pub const Context = struct {
             // if the queue itself dropped an item during this push.
             const before = self.queue.droppedCount();
 
-            self.queue.pushDropOldest(qr);
+            // pushDropOldest returns the queue length after the push,
+            // eliminating the need for a separate len() call.
+            const queue_len = self.queue.pushDropOldest(qr);
 
             const after = self.queue.droppedCount();
             if (after > before) {
                 metrics.global.incDropped(after - before);
             }
+
+            metrics.global.setQueueSize(queue_len);
         } else {
             // Blocking mode
             self.queue.pushBlocking(qr, self.block_timeout_ms) catch |err| {
@@ -172,9 +176,9 @@ pub const Context = struct {
                     else => return err,
                 }
             };
-        }
 
-        metrics.global.setQueueSize(self.queue.len());
+            metrics.global.setQueueSize(self.queue.len());
+        }
     }
 
     /// Returns the total number of records dropped by the queue.
@@ -186,7 +190,8 @@ pub const Context = struct {
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    if (!rec.level.atLeast(ctx.level)) return;
+    const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
+    if (!rec.level.atLeast(current_level)) return;
 
     ctx.enqueue(rec) catch |err| {
         return switch (err) {
@@ -212,7 +217,7 @@ fn withGroup(ctx_ptr: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.level = level;
+    ctx.level.store(@intFromEnum(level), .release);
 }
 
 /// Flush waits for the queue to drain using the queue's empty condition

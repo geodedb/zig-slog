@@ -14,6 +14,14 @@ pub const MAX_KEY_LENGTH = 64;
 /// - Replaces invalid characters with '_'
 /// - Truncates to MAX_KEY_LENGTH
 /// - Returns the sanitized key in the provided buffer
+///
+/// **Known limitation -- key collisions:** Because all non-alphanumeric,
+/// non-`_-.` characters are replaced with `_`, distinct raw keys can
+/// produce the same sanitized key. For example, `user/id` and `user@id`
+/// both become `user_id`. A full deduplication pass (e.g., appending `_2`)
+/// is not implemented because it would change the output schema in ways
+/// that could break downstream consumers. Callers should avoid relying on
+/// raw keys that differ only in characters outside `[a-zA-Z0-9_.-]`.
 pub fn sanitizeKey(buf: *[MAX_KEY_LENGTH]u8, key: []const u8) []const u8 {
     const len = @min(key.len, MAX_KEY_LENGTH);
     for (key[0..len], 0..) |c, i| {

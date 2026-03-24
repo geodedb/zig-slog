@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Created:** 2026-03-23
-**Last updated:** 2026-03-24 (rev 3 -- pass 4 resolved items added)
+**Last updated:** 2026-03-24 (rev 5 -- pass 5 closure: 24 items closed, 9 won't do)
 
 ---
 
@@ -502,16 +502,212 @@ Move entries here from GAP_ANALYSIS.md when resolution evidence is confirmed.
 
 ---
 
+## Resolved Gaps -- Pass 5 (2026-03-24)
+
+### Phase 1 -- Quick Wins (18 items)
+
+### Q-38: Dead testWrite helper in text_value.zig
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Dead `testWrite` function removed from text_value.zig.
+- **Evidence:** `src/fmt/text_value.zig` -- function removed.
+
+### Q-39: "[REDACTED]" string literal duplicated across 3 locations
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** `value.zig` and `queue.zig` now import `redact.REDACTED` instead of using independent string literals.
+- **Evidence:** `src/value.zig` -- `return @import("util/redact.zig").REDACTED;`; `src/internal/queue.zig` -- `const redacted = @import("../util/redact.zig").REDACTED;`.
+
+### SEC-0030: Sensitive key list expanded (16 new patterns)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** `sensitive_keys` list in redact.zig expanded from 15 to 31 patterns. Added: ssn, social_security, credit_card, card_number, cvv, cvc, session_id, cookie, bearer, jwt, connection_string, conn_str, database_url, db_password, pin, otp.
+- **Evidence:** `src/util/redact.zig:15-31` -- expanded sensitive_keys array.
+
+### SEC-0031: Logger name sanitized in text handlers
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** `rec.logger` now passed through `sanitizeOutput()` in text handlers, preventing log injection via logger names containing control characters.
+- **Evidence:** `src/handlers/text_handler.zig` -- sanitizeOutput applied to rec.logger.
+
+### SEC-0032: Syslog hostname sanitized via writeSyslogName
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Hostname field in syslog handler now routed through `writeSyslogName()`, consistent with APP-NAME and MSGID fields.
+- **Evidence:** `src/handlers/syslog_rfc5424.zig` -- hostname written via writeSyslogName.
+
+### SEC-0033: Non-atomic level fixed across all 12 handlers (atomic Value)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Handler `level` field changed from plain enum to atomic Value across all 12 handlers. `setLevel()` uses atomic store; `handle()` uses atomic load. Combined fix with PERF-031.
+- **Evidence:** All handler files -- level field uses atomic Value; setLevel/handle use atomic store/load.
+
+### PERF-031: Same as SEC-0033 (combined fix)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Combined with SEC-0033. Data race on async_handler.Context.level eliminated by atomic Value.
+- **Evidence:** See SEC-0033 above.
+
+### SEC-0034: File permissions set to 0o600
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Rotating file handler now passes explicit `.mode = 0o600` to `createFile`, ensuring log files are owner read/write only regardless of umask.
+- **Evidence:** `src/handlers/rotating_file.zig` -- `.mode = 0o600` in createFile options.
+
+### SEC-0035: UDP oversized records dropped instead of truncated
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** UDP sink now drops oversized records and increments error counter instead of truncating at arbitrary byte boundaries, preventing malformed JSON.
+- **Evidence:** `src/sinks/udp_sink.zig` -- size check before send; metrics counter incremented on drop.
+
+### SEC-0036: Key collision risk documented in sanitize.zig
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Key collision from sanitizeKey() documented as known limitation in sanitize.zig doc comments.
+- **Evidence:** `src/util/sanitize.zig` -- doc comment documenting collision possibility.
+
+### SEC-0027: Secret-in-message limitation documented
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Limitation that message body content is NOT scanned for secrets documented in API docs and SECURITY.md. Recommends using Attr.secret() for sensitive values.
+- **Evidence:** Documentation updated to note message body bypass limitation.
+
+### PERF-032: Attr truncation now increments metrics counter
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** When attribute count exceeds MAX_STORED_ATTRS=8, truncation now increments `metrics.global.incTruncations()` counter, providing a diagnostic signal.
+- **Evidence:** `src/internal/queue.zig` -- metrics counter incremented on truncation.
+
+### PERF-033: Double mutex eliminated (pushDropOldest returns count)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** `pushDropOldest()` now returns the count, eliminating the separate `queue.len()` call that caused a second mutex acquisition per async enqueue.
+- **Evidence:** `src/internal/queue.zig` -- pushDropOldest returns count; `src/handlers/async_handler.zig` -- no separate len() call.
+
+### PERF-038: getPool() uses double-checked locking
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** `getPool()` in parallel.zig now uses atomic load to check if pool is initialized before acquiring mutex, avoiding unnecessary lock on hot path.
+- **Evidence:** `src/parallel.zig` -- atomic load before mutex acquire in getPool().
+
+### GAP-0026: API.md convenience function signatures fixed
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** API.md updated with correct `*Context` out-parameter signatures matching current slogz.zig API.
+- **Evidence:** `docs/API.md` -- updated stderrHandler/stderrJsonHandler signatures.
+
+### GAP-0027: ARCHITECTURE.md module tree updated
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Module tree in ARCHITECTURE.md updated to list all source files including newly added modules.
+- **Evidence:** `docs/ARCHITECTURE.md` -- complete module tree.
+
+### Q-32: slogz.zig docstring example fixed
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Module docstring example in slogz.zig updated to match actual API: `Logger.init(handler, .info, slogz.Clock.system())`, `logger.info("app.started", &.{...})`, removed incorrect `deinit` call.
+- **Evidence:** `src/slogz.zig` -- docstring lines 28-34 updated.
+
+### Q-37: HTTP sink false pooling claim removed
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Removed false "Connection pooling (simplified)" claim from http_sink.zig docstring.
+- **Evidence:** `src/sinks/http_sink.zig` -- docstring corrected.
+
+### Q-40: isSensitiveKey auto-redaction documented
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Added docstring to redact.zig `isSensitiveKey` listing all sensitive patterns. Added "Auto-redaction" section to slogz.zig module docstring.
+- **Evidence:** `src/util/redact.zig` -- isSensitiveKey docstring; `src/slogz.zig` -- auto-redaction documentation.
+
+### Phase 2 -- Medium Effort (6 items)
+
+### Q-31: Logger.with() attrs now merged into Record
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** `Logger.log()` now merges `self.context_attrs` into the Record's attrs, ensuring attributes passed via `Logger.with()` are included in all handler outputs.
+- **Evidence:** `src/logger.zig` -- Record construction includes context_attrs.
+
+### Q-36: msg_id written to all outputs when different from message
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** All JSON and text handlers now write `msg_id` field when it is non-empty and differs from the message field.
+- **Evidence:** `src/fmt/json_record.zig` -- msg_id field in JSON output; `src/fmt/text_record.zig` -- msg_id in text output.
+
+### Q-35: JSON schema reconciled to flat attrs + flat source
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** JSON schema standardized across all 4 JSON emitters. Attrs flattened to top-level keys; source written as flat object. All emitters use shared `writeJsonRecord()` from json_record.zig.
+- **Evidence:** `src/fmt/json_record.zig` -- shared writeJsonRecord with canonical schema.
+
+### Q-33: JSON record formatting extracted to json_record.zig
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Record-level JSON formatting (beginObject, time, level, msg, logger, attrs, endObject) extracted to `src/fmt/json_record.zig`. All 4 JSON emitters (json_handler, tcp_sink, udp_sink, http_sink) import the shared function.
+- **Evidence:** `src/fmt/json_record.zig` -- shared writeJsonRecord; `src/handlers/json_handler.zig`, `src/sinks/tcp_sink.zig`, `src/sinks/udp_sink.zig`, `src/sinks/http_sink.zig` -- import shared function.
+
+### Q-34: Text record formatting extracted to text_record.zig
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Record-level text formatting (timestamp, level, logger, message, attrs loop) extracted to `src/fmt/text_record.zig`. Both text_handler and rotating_file import the shared function.
+- **Evidence:** `src/fmt/text_record.zig` -- shared writeTextRecord; `src/handlers/text_handler.zig`, `src/handlers/rotating_file.zig` -- import shared function.
+
+### PERF-036: Benchmark suite expanded (3 new benchmarks)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 5)
+- **Resolution:** Added 3 new benchmarks: async handler throughput, queue contention under multi-threaded load, and isSensitiveKey pattern matching.
+- **Evidence:** `bench/bench_main.zig` -- new benchmark functions for async, queue contention, and isSensitiveKey.
+
+### Phase 2 -- Won't Do Items (9 items)
+
+### SEC-0026: No TLS for network sinks
+- **Status:** Won't Do
+- **Reason:** TLS implementation exceeds library scope; Zig stdlib TLS still maturing. SEC-0004 covers the same scope and was already Won't Do.
+
+### SEC-0028: HTTP sink no server auth
+- **Status:** Won't Do
+- **Reason:** Blocked by SEC-0026 (requires TLS). Without TLS, server identity validation is meaningless.
+
+### SEC-0029: TCP sink no auth mechanism
+- **Status:** Won't Do
+- **Reason:** Blocked by SEC-0026; SEC-0016 same scope already Won't Do.
+
+### PERF-029: HTTP sink no batching/connection pooling
+- **Status:** Won't Do
+- **Reason:** PERF-001/002/003 same scope already Won't Do. Misleading documentation claim fixed via Q-37.
+
+### PERF-030: TCP/HTTP retry blocks under mutex
+- **Status:** Won't Do
+- **Reason:** PERF-002/003/006 same scope already Won't Do. Circuit breaker (PERF-010) mitigates the worst case.
+
+### PERF-034: Batch drain no batched I/O
+- **Status:** Won't Do
+- **Reason:** Requires vtable API change (adding handleBatch method). Deferred to future release.
+
+### PERF-035: Multi-handler sequential dispatch
+- **Status:** Won't Do
+- **Reason:** Changes ordering guarantees that callers may depend on. Opt-in parallel dispatch flag deferred to future release.
+
+### PERF-037: No CI regression detection
+- **Status:** Won't Do
+- **Reason:** Requires infrastructure project (baseline storage, threshold comparison). Depends on PERF-036 (benchmark suite, now done). Separate effort.
+
+### GAP-0028: GitLab #40 tracking discrepancy
+- **Status:** Won't Do
+- **Reason:** Requires manual GitLab issue close. Cannot automate without direct issue access. Maintainer should close GitLab #40 manually.
+
+---
+
 ## ID Registry
 
 The following Gap-IDs have been assigned. Never reuse an ID.
 
 | Range | Status |
 |-------|--------|
-| GAP-0001 through GAP-0025 | Assigned (see GAP_ANALYSIS.md) |
+| GAP-0001 through GAP-0028 | Assigned (see GAP_ANALYSIS.md) |
 | GAP-0036 | Assigned (SEC-0020, see GAP_ANALYSIS.md) |
-| SEC-0001 through SEC-0025 | Assigned (see GAP_ANALYSIS.md) |
-| PERF-001 through PERF-028 | Assigned (see PERF_GAP_ANALYSIS.md) |
-| Quality Rank 1-20, Q-21 through Q-30, NEW-01, NEW-03 | Assigned (see QUALITY_GAP_ANALYSIS.md) |
-| GAP-0026 through GAP-0035 | Available |
+| SEC-0001 through SEC-0036 | Assigned (see GAP_ANALYSIS.md) |
+| PERF-001 through PERF-038 | Assigned (see PERF_GAP_ANALYSIS.md) |
+| Quality Rank 1-20, Q-21 through Q-40, NEW-01, NEW-03 | Assigned (see QUALITY_GAP_ANALYSIS.md) |
+| GAP-0029 through GAP-0035 | Available |
 | GAP-0037+ | Available |

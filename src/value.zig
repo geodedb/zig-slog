@@ -7,6 +7,7 @@
 //! for redaction and Marshaler for custom serialization.
 
 const std = @import("std");
+const redact_util = @import("util/redact.zig");
 
 /// A secret value that will be redacted in log output.
 ///
@@ -22,7 +23,7 @@ pub const Secret = struct {
 
     /// Returns the redacted representation.
     pub fn redacted() []const u8 {
-        return "[REDACTED]";
+        return redact_util.REDACTED;
     }
 };
 
@@ -81,7 +82,13 @@ pub const Attr = struct {
         return .{ .key = key, .value = .{ .err = val } };
     }
 
-    /// Creates a secret attribute (will be redacted).
+    /// Creates a secret attribute (will be redacted in all handler output).
+    ///
+    /// The value is replaced with "[REDACTED]" during serialization by every
+    /// handler. Note that only structured attribute values are redacted --
+    /// the `message` field of a log record is NOT scanned for secrets.
+    /// Never embed sensitive data directly in message strings; use this
+    /// method instead to ensure automatic redaction.
     pub fn secret(key: []const u8, val: []const u8) Attr {
         return .{ .key = key, .value = .{ .secret = Secret.init(val) } };
     }

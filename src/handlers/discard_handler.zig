@@ -14,10 +14,10 @@ const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
 
 const Context = struct {
-    level: Level,
+    level: std.atomic.Value(i32),
 };
 
-var global_context = Context{ .level = .info };
+var global_context = Context{ .level = std.atomic.Value(i32).init(@intFromEnum(Level.info)) };
 
 fn handle(_: *anyopaque, _: *const Record) HandlerError!void {
     // Discard
@@ -33,7 +33,7 @@ fn withGroup(_: *anyopaque, _: []const u8) Handler {
 
 fn setLevel(ctx: *anyopaque, level: Level) void {
     const c: *Context = @ptrCast(@alignCast(ctx));
-    c.level = level;
+    c.level.store(@intFromEnum(level), .release);
 }
 
 fn flush(_: *anyopaque, _: u32) HandlerError!void {

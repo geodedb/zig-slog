@@ -131,7 +131,8 @@ test "JSONHandler output format" {
     try std.testing.expect(std.mem.indexOf(u8, output, "\"level\":\"INFO\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"msg\":\"app started\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"logger\":\"web\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"source\":{\"file\":\"main.zig\",\"line\":42}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"source_file\":\"main.zig\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"source_line\":42") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"port\":8080") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"commit\":\"abc123\"") != null);
 }

@@ -12,6 +12,7 @@ src/
 ├── record.zig          # Log record structure
 ├── level.zig           # Log level enum
 ├── value.zig           # Attribute values (Attr, Value, Secret)
+├── parallel.zig        # Spice-based parallel operations
 ├── handlers/
 │   ├── text_handler.zig      # Human-readable output
 │   ├── json_handler.zig      # Structured JSON output
@@ -19,6 +20,7 @@ src/
 │   ├── rotating_file.zig     # Size-based file rotation
 │   ├── syslog_rfc5424.zig    # Syslog protocol handler
 │   ├── discard_handler.zig   # No-op handler (benchmarking)
+│   ├── multi_handler.zig     # Fan-out to multiple handlers
 │   ├── journald.zig          # Linux systemd journal
 │   └── windows_eventlog.zig  # Windows Event Log
 ├── sinks/
@@ -33,7 +35,11 @@ src/
 │   ├── clock.zig             # Time source abstraction
 │   └── queue.zig             # Bounded queue for async
 ├── fmt/
-│   └── rfc3339.zig           # Timestamp formatting
+│   ├── rfc3339.zig           # Timestamp formatting
+│   ├── json_value.zig        # Shared JSON value serialization
+│   ├── json_record.zig       # Shared JSON record formatting
+│   ├── text_value.zig        # Shared text value serialization
+│   └── text_record.zig       # Shared text record formatting
 └── util/
     ├── redact.zig            # Secret redaction
     └── sanitize.zig          # Key sanitization

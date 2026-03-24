@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Date:** 2026-03-24
-**Commits:** ec068d0, 3fcd5a5, 05c6a16, 0ed8afe, 677630f (passes 1-2), pass 3, pass 4 (current)
+**Commits:** ec068d0, 3fcd5a5, 05c6a16, 0ed8afe, 677630f (passes 1-2), pass 3, pass 4, pass 5 (current)
 
 ---
 
@@ -10,14 +10,77 @@
 
 | File | Closed | Blocked | Won't Do | Partially Closed | Remaining Open | Total |
 |------|--------|---------|----------|------------------|----------------|-------|
-| GAP_ANALYSIS.md (Security) | 22 | 1 | 2 | 0 | 0 | 25 |
-| QUALITY_GAP_ANALYSIS.md | 27 | 0 | 2 | 1 | 0 | 30 |
-| PERF_GAP_ANALYSIS.md | 18 | 0 | 10 | 0 | 0 | 28 |
-| **Total** | **67** | **1** | **14** | **1** | **0** | **83** |
+| GAP_ANALYSIS.md (Security + Docs) | 32 | 1 | 6 | 0 | 0 | 39 |
+| QUALITY_GAP_ANALYSIS.md | 37 | 0 | 2 | 1 | 0 | 40 |
+| PERF_GAP_ANALYSIS.md | 23 | 0 | 15 | 0 | 0 | 38 |
+| **Total** | **92** | **1** | **23** | **1** | **0** | **117** |
 
-**Overall:** 67 closed, 1 blocked, 14 won't do, 1 partially closed out of 83 total items. Zero remaining open items.
+**Overall:** 92 closed, 1 blocked, 23 won't do, 1 partially closed out of 117 total items. Zero remaining open items.
 
-**Note:** Item counts increased from 80 (pass 3) to 83 (pass 4) because pass 4 added new findings: SEC-0025, NEW-01 (Q-29), NEW-03 (Q-30).
+**Note:** Total items = 117 (39 security/docs + 40 quality + 38 performance). Pass 5 closed 24 items and marked 9 as Won't Do, bringing all open items to zero.
+
+---
+
+## Pass 5 Summary
+
+Pass 5 addressed 33 gap items (24 closures + 9 won't-do), bringing all open items to zero:
+
+| Category | Closed | Won't Do | Blocked |
+|----------|--------|----------|---------|
+| Security | 10 | 3 | 0 |
+| Quality | 10 | 0 | 0 |
+| Performance | 5 | 5 | 0 |
+| Docs/Tracking | 2 | 1 | 0 |
+| **Total** | **24** | **9** | **0** |
+
+### Phase 1 -- Quick Wins (18 items closed)
+
+| Gap-ID | Domain | Title |
+|--------|--------|-------|
+| Q-38 | Quality | Dead testWrite helper removed |
+| Q-39 | Quality | [REDACTED] literal consolidated to redact.REDACTED |
+| SEC-0030 | Security | Sensitive key list expanded (16 new patterns) |
+| SEC-0031 | Security | Logger name sanitized in text handlers |
+| SEC-0032 | Security | Syslog hostname sanitized via writeSyslogName |
+| SEC-0033 | Security | Non-atomic level fixed across all 12 handlers (atomic Value) |
+| PERF-031 | Performance | Same as SEC-0033 (combined fix) |
+| SEC-0034 | Security | File permissions set to 0o600 |
+| SEC-0035 | Security | UDP oversized records dropped instead of truncated |
+| SEC-0036 | Security | Key collision risk documented in sanitize.zig |
+| SEC-0027 | Security | Secret-in-message limitation documented |
+| PERF-032 | Performance | Attr truncation now increments metrics counter |
+| PERF-033 | Performance | Double mutex eliminated (pushDropOldest returns count) |
+| PERF-038 | Performance | getPool() uses double-checked locking |
+| GAP-0026 | Docs | API.md convenience function signatures fixed |
+| GAP-0027 | Docs | ARCHITECTURE.md module tree updated |
+| Q-32 | Quality | slogz.zig docstring example fixed |
+| Q-37 | Quality | HTTP sink false pooling claim removed |
+| Q-40 | Quality | isSensitiveKey auto-redaction documented |
+
+### Phase 2 -- Medium Effort (6 items closed)
+
+| Gap-ID | Domain | Title |
+|--------|--------|-------|
+| Q-31 | Quality | Logger.with() attrs now merged into Record |
+| Q-36 | Quality | msg_id written to all outputs when different from message |
+| Q-35 | Quality | JSON schema reconciled to flat attrs + flat source |
+| Q-33 | Quality | JSON record formatting extracted to json_record.zig |
+| Q-34 | Quality | Text record formatting extracted to text_record.zig |
+| PERF-036 | Performance | Benchmark suite expanded (3 new benchmarks) |
+
+### Won't Do items (9 items)
+
+| Gap-ID | Domain | Title | Reason |
+|--------|--------|-------|--------|
+| SEC-0026 | Security | No TLS for network sinks | TLS implementation exceeds library scope; Zig stdlib TLS still maturing |
+| SEC-0028 | Security | HTTP sink no server auth | Blocked by SEC-0026 (requires TLS) |
+| SEC-0029 | Security | TCP sink no auth mechanism | Blocked by SEC-0026; SEC-0016 same scope already Won't Do |
+| PERF-029 | Performance | HTTP sink no batching/connection pooling | PERF-001/002/003 same scope already Won't Do; misleading doc fixed via Q-37 |
+| PERF-030 | Performance | TCP/HTTP retry blocks under mutex | PERF-002/003/006 same scope already Won't Do; circuit breaker mitigates |
+| PERF-034 | Performance | Batch drain no batched I/O | Requires vtable API change (handleBatch); deferred to future release |
+| PERF-035 | Performance | Multi-handler sequential dispatch | Changes ordering guarantees; opt-in flag deferred to future release |
+| PERF-037 | Performance | No CI regression detection | Requires infrastructure project; depends on PERF-036 (now done) |
+| GAP-0028 | Tracking | GitLab #40 tracking discrepancy | Requires manual GitLab issue close; cannot automate without issue access |
 
 ---
 
@@ -145,6 +208,36 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 | PERF-023 | PERF_GAP_ANALYSIS.md | isSensitiveKey() O(k*p) linear scan | redact.zig:33-60 -- comptime min_pattern_len early rejection + inline for single-pass scan |
 | PERF-026 | PERF_GAP_ANALYSIS.md | Async handler single-record processing | async_handler.zig:98-125 -- max_batch_size=32, tryPop batch drain, processQueuedRecord helper |
 
+### Pass 5 Closures (new)
+
+| Gap-ID | File | Title | Evidence |
+|--------|------|-------|----------|
+| Q-38 | QUALITY_GAP_ANALYSIS.md | Dead testWrite helper removed | src/fmt/text_value.zig -- testWrite function removed |
+| Q-39 | QUALITY_GAP_ANALYSIS.md | [REDACTED] literal consolidated | value.zig and queue.zig now import redact.REDACTED |
+| SEC-0030 | GAP_ANALYSIS.md | Sensitive key list expanded (16 new patterns) | src/util/redact.zig:15-31 -- sensitive_keys expanded from 15 to 31 patterns |
+| SEC-0031 | GAP_ANALYSIS.md | Logger name sanitized in text handlers | src/handlers/text_handler.zig -- sanitizeOutput on rec.logger |
+| SEC-0032 | GAP_ANALYSIS.md | Syslog hostname sanitized | src/handlers/syslog_rfc5424.zig -- hostname via writeSyslogName |
+| SEC-0033 | GAP_ANALYSIS.md | Non-atomic level fixed (all 12 handlers) | All handler files -- atomic Value for level field |
+| PERF-031 | PERF_GAP_ANALYSIS.md | Data race on level (combined with SEC-0033) | All handler files -- atomic store/load for level |
+| SEC-0034 | GAP_ANALYSIS.md | File permissions set to 0o600 | src/handlers/rotating_file.zig -- .mode = 0o600 |
+| SEC-0035 | GAP_ANALYSIS.md | UDP oversized records dropped | src/sinks/udp_sink.zig -- drop + metrics counter |
+| SEC-0036 | GAP_ANALYSIS.md | Key collision documented | src/util/sanitize.zig -- doc comment on collision |
+| SEC-0027 | GAP_ANALYSIS.md | Secret-in-message limitation documented | SECURITY.md and API docs updated |
+| PERF-032 | PERF_GAP_ANALYSIS.md | Attr truncation metrics counter | src/internal/queue.zig -- incTruncations on overflow |
+| PERF-033 | PERF_GAP_ANALYSIS.md | Double mutex eliminated | queue.zig pushDropOldest returns count; no separate len() |
+| PERF-038 | PERF_GAP_ANALYSIS.md | getPool() double-checked locking | src/parallel.zig -- atomic load before mutex |
+| GAP-0026 | GAP_ANALYSIS.md | API.md signatures fixed | docs/API.md -- updated stderrHandler/stderrJsonHandler |
+| GAP-0027 | GAP_ANALYSIS.md | ARCHITECTURE.md module tree updated | docs/ARCHITECTURE.md -- complete file listing |
+| Q-32 | QUALITY_GAP_ANALYSIS.md | slogz.zig docstring example fixed | src/slogz.zig -- docstring matches actual API |
+| Q-37 | QUALITY_GAP_ANALYSIS.md | HTTP sink false pooling claim removed | src/sinks/http_sink.zig -- docstring corrected |
+| Q-40 | QUALITY_GAP_ANALYSIS.md | isSensitiveKey auto-redaction documented | src/util/redact.zig and src/slogz.zig -- docstrings added |
+| Q-31 | QUALITY_GAP_ANALYSIS.md | Logger.with() attrs merged into Record | src/logger.zig -- Record includes context_attrs |
+| Q-36 | QUALITY_GAP_ANALYSIS.md | msg_id written to all outputs | src/fmt/json_record.zig, src/fmt/text_record.zig -- msg_id field |
+| Q-35 | QUALITY_GAP_ANALYSIS.md | JSON schema reconciled | src/fmt/json_record.zig -- flat attrs + flat source |
+| Q-33 | QUALITY_GAP_ANALYSIS.md | JSON record formatting extracted | src/fmt/json_record.zig -- shared writeJsonRecord |
+| Q-34 | QUALITY_GAP_ANALYSIS.md | Text record formatting extracted | src/fmt/text_record.zig -- shared writeTextRecord |
+| PERF-036 | PERF_GAP_ANALYSIS.md | Benchmark suite expanded | bench/bench_main.zig -- 3 new benchmarks |
+
 ---
 
 ## Won't Do Items
@@ -165,6 +258,15 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 | PERF-017 | PERF_GAP_ANALYSIS.md | parallel.zig dead code adds build cost | Intentionally published module (commits 1fa06e6/1041b15); not dead code |
 | PERF-025 | PERF_GAP_ANALYSIS.md | Stack allocations 8-25KB per log call | Requires profiling data; risks truncation of large records |
 | PERF-027 | PERF_GAP_ANALYSIS.md | Multi-handler re-formats per child | Architecturally expected; pre-formatting needs format negotiation |
+| SEC-0026 | GAP_ANALYSIS.md | No TLS for network sinks | TLS implementation exceeds library scope; Zig stdlib TLS still maturing |
+| SEC-0028 | GAP_ANALYSIS.md | HTTP sink no server auth | Blocked by SEC-0026 (requires TLS) |
+| SEC-0029 | GAP_ANALYSIS.md | TCP sink no auth mechanism | Blocked by SEC-0026; SEC-0016 same scope already Won't Do |
+| PERF-029 | PERF_GAP_ANALYSIS.md | HTTP sink no batching/connection pooling | PERF-001/002/003 same scope already Won't Do; misleading doc fixed |
+| PERF-030 | PERF_GAP_ANALYSIS.md | TCP/HTTP retry blocks under mutex | PERF-002/003/006 same scope already Won't Do; circuit breaker mitigates |
+| PERF-034 | PERF_GAP_ANALYSIS.md | Batch drain no batched I/O | Requires vtable API change (handleBatch); deferred to future release |
+| PERF-035 | PERF_GAP_ANALYSIS.md | Multi-handler sequential dispatch | Changes ordering guarantees; opt-in flag deferred |
+| PERF-037 | PERF_GAP_ANALYSIS.md | No CI regression detection | Requires infrastructure project |
+| GAP-0028 | GAP_ANALYSIS.md | GitLab #40 tracking discrepancy | Requires manual GitLab issue close |
 
 ---
 
@@ -182,11 +284,19 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 |--------|------|-------|--------|
 | Q-27 | QUALITY_GAP_ANALYSIS.md | deprecatedWriter() in slogz.zig | **Partially closed** -- windows_eventlog.zig fixed; slogz.zig blocked on AnyWriter handler interface refactor |
 
-**Note:** No fully open items remain. Q-27 is partially closed. All former open items (PERF-008, PERF-017, PERF-023, PERF-026) resolved in pass 4.
+**Note:** No fully open items remain. Q-27 is partially closed (windows_eventlog.zig fixed; slogz.zig blocked on AnyWriter handler interface refactor). All 33 pass-5 items resolved (24 closed + 9 won't do).
 
 ---
 
 ## Tests Executed
+
+### Pass 5
+
+| Command | Result |
+|---------|--------|
+| `zig build test --summary all` | PASS (240/240 tests) |
+| `zig fmt --check src/ build.zig` | PASS (format clean) |
+| `zig build` | PASS (build clean) |
 
 ### Pass 4
 
@@ -207,6 +317,19 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 ---
 
 ## Security Notes
+
+### Pass 5
+
+- **Sensitive key coverage expanded (SEC-0030):** 16 new patterns added to the sensitive_keys list (ssn, credit_card, cvv, session_id, cookie, bearer, jwt, connection_string, etc.), increasing coverage from 15 to 31 patterns.
+- **Data race eliminated (SEC-0033/PERF-031):** All 12 handler types now use atomic Value for the level field, eliminating data races between setLevel() and handle() calls on different threads.
+- **File permissions hardened (SEC-0034):** Rotating file handler creates log files with explicit 0o600 permissions, preventing world-readable logs regardless of umask.
+- **UDP integrity protected (SEC-0035):** Oversized UDP records are now dropped (with metrics counter) instead of truncated at arbitrary byte boundaries, preventing malformed JSON from reaching downstream parsers.
+- **Logger name injection prevented (SEC-0031):** Logger name field now sanitized in text handlers, closing the last unsanitized field in the text output path.
+- **Syslog hostname sanitized (SEC-0032):** Hostname field now routed through writeSyslogName, consistent with APP-NAME and MSGID fields.
+- **Secret-in-message limitation documented (SEC-0027):** Clearly documented that message body content is NOT scanned for secrets. Users directed to use Attr.secret() for sensitive values.
+- **Key collision documented (SEC-0036):** The possibility of different keys sanitizing to the same output (e.g., "user/id" and "user@id" both becoming "user_id") is now documented as a known limitation.
+- **Auto-redaction documented (Q-40):** The complete list of 31 sensitive key patterns is now documented in redact.zig and referenced in slogz.zig module docs.
+- **TLS deferred (SEC-0026/0028/0029):** Marked Won't Do. TLS implementation exceeds the library's current scope. Zig stdlib TLS is still maturing. Users are advised to use encrypted transport at the network layer (VPN, mTLS proxy) or wait for a future TLS-capable release.
 
 ### Pass 4
 
@@ -292,6 +415,10 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 |--------|-------|--------|
 | PERF-008 | #30 | closed |
 
+### Pass 5
+
+Skip-issues mode -- no GitLab issues created, closed, or updated. GAP-0028 notes that GitLab #40 should be closed manually.
+
 ---
 
 ## Files Changed
@@ -357,3 +484,33 @@ Logger.named() concatenation, DNS hostname resolution for TCP/HTTP sinks, multi_
 | src/internal/queue.zig | MAX_STORED_ATTRS 32->8, MAX_VALUE_LEN 256->128, msg_id_buf 256->64, source_file_buf 256->128 |
 | src/util/redact.zig | comptime min_pattern_len, inline for single-pass scan replacing sequential indexOf |
 | src/handlers/async_handler.zig | batch drain (max_batch_size=32, tryPop loop), processQueuedRecord helper extracted |
+
+### Pass 5 (key files modified)
+
+| File | Changes |
+|------|---------|
+| src/fmt/json_record.zig | NEW: shared writeJsonRecord() extracted from 4 JSON emitters |
+| src/fmt/text_record.zig | NEW: shared writeTextRecord() extracted from 2 text emitters |
+| src/fmt/text_value.zig | Dead testWrite helper removed |
+| src/util/redact.zig | Sensitive key list expanded from 15 to 31 patterns |
+| src/util/sanitize.zig | Key collision doc comment added |
+| src/value.zig | [REDACTED] literal replaced with redact.REDACTED import |
+| src/internal/queue.zig | [REDACTED] literal replaced; pushDropOldest returns count; truncation metrics |
+| src/logger.zig | Logger.log() merges context_attrs into Record |
+| src/parallel.zig | getPool() double-checked locking with atomic load |
+| src/handlers/text_handler.zig | sanitizeOutput on rec.logger; writeTextRecord import; atomic level |
+| src/handlers/json_handler.zig | writeJsonRecord import; atomic level |
+| src/handlers/syslog_rfc5424.zig | hostname via writeSyslogName; atomic level |
+| src/handlers/rotating_file.zig | createFile mode 0o600; writeTextRecord import; atomic level |
+| src/handlers/journald.zig | atomic level |
+| src/handlers/windows_eventlog.zig | atomic level |
+| src/handlers/async_handler.zig | atomic level; no separate len() call |
+| src/handlers/discard_handler.zig | atomic level |
+| src/handlers/multi_handler.zig | atomic level |
+| src/sinks/tcp_sink.zig | writeJsonRecord import; atomic level |
+| src/sinks/udp_sink.zig | writeJsonRecord import; oversized record drop; atomic level |
+| src/sinks/http_sink.zig | writeJsonRecord import; false pooling docstring removed; atomic level |
+| src/slogz.zig | Docstring example fixed; auto-redaction docs added |
+| docs/API.md | stderrHandler/stderrJsonHandler signatures fixed |
+| docs/ARCHITECTURE.md | Module tree updated with all source files |
+| bench/bench_main.zig | 3 new benchmarks: async handler, queue contention, isSensitiveKey |
