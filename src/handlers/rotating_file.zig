@@ -8,10 +8,14 @@
 //! - Maximum number of backup files (max_backups)
 //! - Age-based pruning (max_age_days)
 //! - Atomic reopen for external rotation (logrotate/SIGHUP)
+//! - Write buffering (8KB) to reduce syscalls
+//! - Path traversal protection
 
 const std = @import("std");
 const Level = @import("../level.zig").Level;
 const Attr = @import("../value.zig").Attr;
+const Value = @import("../value.zig").Value;
+const Secret = @import("../value.zig").Secret;
 const Record = @import("../record.zig").Record;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
@@ -19,7 +23,10 @@ const HandlerError = @import("../handler.zig").HandlerError;
 const Clock = @import("../internal/clock.zig").Clock;
 const rfc3339 = @import("../fmt/rfc3339.zig");
 const metrics = @import("../metrics/metrics.zig");
-const text_handler = @import("text_handler.zig");
+const redact = @import("../util/redact.zig");
+
+/// Write buffer size (8KB).
+const WRITE_BUF_SIZE = 8192;
 
 /// Rotation options.
 pub const RotationOptions = struct {
@@ -39,8 +46,14 @@ pub const Context = struct {
     clock: Clock,
     mutex: std.Thread.Mutex,
     path_buf: [std.fs.max_path_bytes]u8,
+    path_buf2: [std.fs.max_path_bytes]u8,
+    write_buf: [WRITE_BUF_SIZE]u8,
+    write_buf_pos: usize,
 
     pub fn init(allocator: std.mem.Allocator, options: RotationOptions, level: Level, clock: Clock) !Context {
+        // Validate path before proceeding
+        try validatePath(options.path);
+
         var ctx = Context{
             .allocator = allocator,
             .options = options,
@@ -50,6 +63,9 @@ pub const Context = struct {
             .clock = clock,
             .mutex = .{},
             .path_buf = undefined,
+            .path_buf2 = undefined,
+            .write_buf = undefined,
+            .write_buf_pos = 0,
         };
 
         try ctx.openFile();
@@ -60,9 +76,28 @@ pub const Context = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        // Flush buffered data before closing
+        self.flushWriteBuf() catch {
+            metrics.global.incErrors();
+        };
+
         if (self.file) |f| {
             f.close();
             self.file = null;
+        }
+    }
+
+    /// Validates that a path does not contain traversal sequences or is absolute
+    /// when relative paths are expected.
+    fn validatePath(path: []const u8) !void {
+        // Reject empty paths
+        if (path.len == 0) {
+            return error.WriteFailed;
+        }
+
+        // Reject paths containing parent directory references
+        if (std.mem.indexOf(u8, path, "..") != null) {
+            return error.WriteFailed;
         }
     }
 
@@ -71,7 +106,9 @@ pub const Context = struct {
 
         // Get or create directory
         if (std.fs.path.dirname(path)) |dir| {
-            std.fs.cwd().makePath(dir) catch {};
+            std.fs.cwd().makePath(dir) catch {
+                metrics.global.incErrors();
+            };
         }
 
         self.file = std.fs.cwd().createFile(path, .{
@@ -83,6 +120,9 @@ pub const Context = struct {
             };
         };
 
+        // Reset write buffer position for the new file
+        self.write_buf_pos = 0;
+
         // Seek to end
         if (self.file) |f| {
             const stat = f.stat() catch {
@@ -90,11 +130,20 @@ pub const Context = struct {
                 return;
             };
             self.current_size = stat.size;
-            f.seekTo(stat.size) catch {};
+            f.seekTo(stat.size) catch {
+                // If seek fails, reset to safe default so rotation
+                // thresholds are not based on a stale value.
+                self.current_size = 0;
+            };
         }
     }
 
     fn rotate(self: *Context) !void {
+        // Flush buffered data before rotating
+        self.flushWriteBuf() catch {
+            metrics.global.incErrors();
+        };
+
         // Close current file
         if (self.file) |f| {
             f.close();
@@ -104,21 +153,36 @@ pub const Context = struct {
         // Rotate existing backups
         var i: u8 = self.options.max_backups;
         while (i > 0) : (i -= 1) {
-            const old_path = try self.formatBackupPath(i);
-            const new_path = try self.formatBackupPath(i + 1);
-
             if (i >= self.options.max_backups) {
-                // Delete oldest
-                std.fs.cwd().deleteFile(old_path) catch {};
+                // Delete oldest -- use path_buf for the path to delete
+                const del_path = self.formatBackupPath1(i) catch continue;
+                std.fs.cwd().deleteFile(del_path) catch |err| switch (err) {
+                    error.FileNotFound => {},
+                    else => {
+                        metrics.global.incErrors();
+                    },
+                };
             } else {
-                // Rename to next number
-                std.fs.cwd().rename(old_path, new_path) catch {};
+                // Rename to next number -- use separate buffers for old and new paths
+                const old_path = self.formatBackupPath1(i) catch continue;
+                const new_path = self.formatBackupPath2(i + 1) catch continue;
+                std.fs.cwd().rename(old_path, new_path) catch |err| switch (err) {
+                    error.FileNotFound => {},
+                    else => {
+                        metrics.global.incErrors();
+                    },
+                };
             }
         }
 
         // Rename current to .1
-        const backup1 = try self.formatBackupPath(1);
-        std.fs.cwd().rename(self.options.path, backup1) catch {};
+        const backup1 = self.formatBackupPath1(1) catch return error.WriteFailed;
+        std.fs.cwd().rename(self.options.path, backup1) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => {
+                metrics.global.incErrors();
+            },
+        };
 
         // Open new file
         try self.openFile();
@@ -126,18 +190,53 @@ pub const Context = struct {
         metrics.global.incRotations();
     }
 
-    fn formatBackupPath(self: *Context, num: u8) ![]const u8 {
+    /// Format a backup path into path_buf (first buffer).
+    fn formatBackupPath1(self: *Context, num: u8) ![]const u8 {
         const path = self.options.path;
-        const len = std.fmt.bufPrint(&self.path_buf, "{s}.{d}", .{ path, num }) catch return error.WriteFailed;
-        return self.path_buf[0..len.len];
+        const result = std.fmt.bufPrint(&self.path_buf, "{s}.{d}", .{ path, num }) catch return error.WriteFailed;
+        return result;
+    }
+
+    /// Format a backup path into path_buf2 (second buffer).
+    fn formatBackupPath2(self: *Context, num: u8) ![]const u8 {
+        const path = self.options.path;
+        const result = std.fmt.bufPrint(&self.path_buf2, "{s}.{d}", .{ path, num }) catch return error.WriteFailed;
+        return result;
+    }
+
+    /// Flush the write buffer to the underlying file.
+    fn flushWriteBuf(self: *Context) !void {
+        if (self.write_buf_pos == 0) return;
+
+        if (self.file) |f| {
+            var written: usize = 0;
+            while (written < self.write_buf_pos) {
+                written += f.write(self.write_buf[written..self.write_buf_pos]) catch return error.WriteFailed;
+            }
+        }
+        self.write_buf_pos = 0;
     }
 
     fn write(self: *Context, data: []const u8) !void {
-        if (self.file) |f| {
-            _ = f.write(data) catch return error.WriteFailed;
-            self.current_size += data.len;
-            metrics.global.addBytesWritten(data.len);
+        if (self.file == null) return;
+
+        var remaining = data;
+        while (remaining.len > 0) {
+            const available = WRITE_BUF_SIZE - self.write_buf_pos;
+            if (available == 0) {
+                // Buffer full, flush it
+                try self.flushWriteBuf();
+                continue;
+            }
+
+            const to_copy = @min(remaining.len, available);
+            @memcpy(self.write_buf[self.write_buf_pos..][0..to_copy], remaining[0..to_copy]);
+            self.write_buf_pos += to_copy;
+            remaining = remaining[to_copy..];
         }
+
+        self.current_size += data.len;
+        metrics.global.addBytesWritten(data.len);
     }
 
     fn checkRotate(self: *Context) !void {
@@ -149,6 +248,11 @@ pub const Context = struct {
     pub fn reopen(self: *Context) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
+
+        // Flush buffered data before reopening
+        self.flushWriteBuf() catch {
+            metrics.global.incErrors();
+        };
 
         if (self.file) |f| {
             f.close();
@@ -198,17 +302,45 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         writer.writeByte(' ') catch return error.WriteFailed;
         writer.writeAll(attr.key) catch return error.WriteFailed;
         writer.writeByte('=') catch return error.WriteFailed;
-        switch (attr.value) {
-            .str => |s| writer.writeAll(s) catch return error.WriteFailed,
-            .i64 => |i| writer.print("{d}", .{i}) catch return error.WriteFailed,
-            .u64 => |u| writer.print("{d}", .{u}) catch return error.WriteFailed,
-            else => writer.writeAll("?") catch return error.WriteFailed,
-        }
+        writeValue(writer, attr.value) catch return error.WriteFailed;
     }
 
     writer.writeByte('\n') catch return error.WriteFailed;
 
     ctx.write(fbs.getWritten()) catch return error.WriteFailed;
+}
+
+/// Write a value to the writer, handling all Value variants explicitly.
+fn writeValue(writer: anytype, value: Value) !void {
+    switch (value) {
+        .str => |s| try writer.writeAll(s),
+        .i64 => |i| try writer.print("{d}", .{i}),
+        .u64 => |u| try writer.print("{d}", .{u}),
+        .f64 => |f| {
+            if (std.math.isNan(f) or std.math.isInf(f)) {
+                try writer.writeAll("null");
+            } else {
+                try writer.print("{d:.6}", .{f});
+            }
+        },
+        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
+        .bytes => |b| {
+            try writer.writeAll("0x");
+            for (b) |byte| {
+                try writer.print("{x:0>2}", .{byte});
+            }
+        },
+        .err => |e| {
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                try writer.writeAll("error(0)");
+            } else {
+                try writer.writeAll(@errorName(e));
+            }
+        },
+        .secret => try writer.writeAll(redact.REDACTED),
+        .marshaler => try writer.writeAll("<marshaler>"),
+    }
 }
 
 fn withAttrs(ctx_ptr: *anyopaque, _: []const Attr) Handler {
@@ -234,6 +366,9 @@ fn flush(ctx_ptr: *anyopaque, _: u32) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
+
+    // Flush the write buffer to the file
+    ctx.flushWriteBuf() catch return error.FlushFailed;
 
     if (ctx.file) |f| {
         f.sync() catch return error.FlushFailed;
@@ -298,4 +433,215 @@ test "RotatingFileHandler basic" {
 
     try handler.handle(&rec);
     try handler.flush(0);
+}
+
+test "RotatingFileHandler path traversal rejection" {
+    const allocator = std.testing.allocator;
+
+    // Paths containing ".." must be rejected
+    const result = Context.init(allocator, .{
+        .path = "/tmp/../etc/passwd",
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+
+    try std.testing.expectError(error.WriteFailed, result);
+
+    // Also reject ".." in middle of path
+    const result2 = Context.init(allocator, .{
+        .path = "/tmp/logs/../../etc/shadow",
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+
+    try std.testing.expectError(error.WriteFailed, result2);
+
+    // Also reject bare ".." path
+    const result3 = Context.init(allocator, .{
+        .path = "..",
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+
+    try std.testing.expectError(error.WriteFailed, result3);
+
+    // Empty path must be rejected
+    const result4 = Context.init(allocator, .{
+        .path = "",
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+
+    try std.testing.expectError(error.WriteFailed, result4);
+}
+
+test "RotatingFileHandler secret redaction" {
+    const allocator = std.testing.allocator;
+
+    // Use temp directory
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/secret_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 10 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "secret test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.secret("password", "super_secret_value"),
+        },
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(0);
+
+    // Read the file contents and verify [REDACTED] is present
+    // and the actual secret is NOT present
+    const file = try std.fs.cwd().openFile(full_path, .{});
+    defer file.close();
+    var read_buf: [4096]u8 = undefined;
+    const bytes_read = try file.readAll(&read_buf);
+    const contents = read_buf[0..bytes_read];
+
+    try std.testing.expect(std.mem.indexOf(u8, contents, "[REDACTED]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "super_secret_value") == null);
+}
+
+test "RotatingFileHandler all value types" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/values_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 10 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "values test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("str_key", "hello"),
+            Attr.int("int_key", -42),
+            Attr.uint("uint_key", 100),
+            Attr.float("float_key", 3.14),
+            Attr.boolean("bool_key", true),
+            Attr.err("err_key", error.OutOfMemory),
+            Attr.secret("secret_key", "hidden"),
+        },
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(0);
+
+    // Read and verify the file contents
+    const file = try std.fs.cwd().openFile(full_path, .{});
+    defer file.close();
+    var read_buf: [4096]u8 = undefined;
+    const bytes_read = try file.readAll(&read_buf);
+    const contents = read_buf[0..bytes_read];
+
+    try std.testing.expect(std.mem.indexOf(u8, contents, "str_key=hello") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "int_key=-42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "uint_key=100") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "float_key=3.14") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "bool_key=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "err_key=OutOfMemory") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "secret_key=[REDACTED]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "hidden") == null);
+}
+
+test "RotatingFileHandler write buffering" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/buffered_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 100 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = init(&ctx);
+
+    // Write multiple small records
+    for (0..10) |_| {
+        const rec = Record{
+            .time_utc_us = 0,
+            .level = .info,
+            .msg_id = "test",
+            .message = "buffered message",
+            .logger = "test",
+            .source_file = "",
+            .source_line = 0,
+            .attrs = &.{},
+        };
+        try handler.handle(&rec);
+    }
+
+    // Before flush, data may be in the write buffer
+    // After flush, all data should be on disk
+    try handler.flush(0);
+
+    const file = try std.fs.cwd().openFile(full_path, .{});
+    defer file.close();
+    var read_buf: [8192]u8 = undefined;
+    const bytes_read = try file.readAll(&read_buf);
+    const contents = read_buf[0..bytes_read];
+
+    // Count newlines to verify all 10 records were written
+    var newline_count: usize = 0;
+    for (contents) |c| {
+        if (c == '\n') newline_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 10), newline_count);
 }
