@@ -14,8 +14,6 @@
 const std = @import("std");
 const Level = @import("../level.zig").Level;
 const Attr = @import("../value.zig").Attr;
-const Value = @import("../value.zig").Value;
-const Secret = @import("../value.zig").Secret;
 const Record = @import("../record.zig").Record;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
@@ -24,6 +22,8 @@ const Clock = @import("../internal/clock.zig").Clock;
 const rfc3339 = @import("../fmt/rfc3339.zig");
 const metrics = @import("../metrics/metrics.zig");
 const redact = @import("../util/redact.zig");
+const sanitize = @import("../util/sanitize.zig");
+const writeTextValue = @import("../fmt/text_value.zig").writeTextValue;
 
 /// Write buffer size (8KB).
 const WRITE_BUF_SIZE = 8192;
@@ -294,53 +294,28 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         writer.writeByte(' ') catch return error.WriteFailed;
     }
 
-    // Message
-    writer.writeAll(rec.message) catch return error.WriteFailed;
+    // Message (sanitize to prevent log injection)
+    sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 
     // Attributes
     for (rec.attrs) |attr| {
         writer.writeByte(' ') catch return error.WriteFailed;
-        writer.writeAll(attr.key) catch return error.WriteFailed;
+        // Sanitize key
+        var key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
+        const key = sanitize.sanitizeKey(&key_buf, attr.key);
+        writer.writeAll(key) catch return error.WriteFailed;
         writer.writeByte('=') catch return error.WriteFailed;
-        writeValue(writer, attr.value) catch return error.WriteFailed;
+        // Auto-redact sensitive keys
+        if (redact.isSensitiveKey(attr.key)) {
+            writer.writeAll(redact.REDACTED) catch return error.WriteFailed;
+        } else {
+            writeTextValue(writer, attr.value) catch return error.WriteFailed;
+        }
     }
 
     writer.writeByte('\n') catch return error.WriteFailed;
 
     ctx.write(fbs.getWritten()) catch return error.WriteFailed;
-}
-
-/// Write a value to the writer, handling all Value variants explicitly.
-fn writeValue(writer: anytype, value: Value) !void {
-    switch (value) {
-        .str => |s| try writer.writeAll(s),
-        .i64 => |i| try writer.print("{d}", .{i}),
-        .u64 => |u| try writer.print("{d}", .{u}),
-        .f64 => |f| {
-            if (std.math.isNan(f) or std.math.isInf(f)) {
-                try writer.writeAll("null");
-            } else {
-                try writer.print("{d:.6}", .{f});
-            }
-        },
-        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-        .bytes => |b| {
-            try writer.writeAll("0x");
-            for (b) |byte| {
-                try writer.print("{x:0>2}", .{byte});
-            }
-        },
-        .err => |e| {
-            const raw: u16 = @intFromError(e);
-            if (raw == 0) {
-                try writer.writeAll("error(0)");
-            } else {
-                try writer.writeAll(@errorName(e));
-            }
-        },
-        .secret => try writer.writeAll(redact.REDACTED),
-        .marshaler => try writer.writeAll("<marshaler>"),
-    }
 }
 
 fn withAttrs(ctx_ptr: *anyopaque, _: []const Attr) Handler {
@@ -375,12 +350,18 @@ fn flush(ctx_ptr: *anyopaque, _: u32) HandlerError!void {
     }
 }
 
+fn close(ctx_ptr: *anyopaque) void {
+    const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
+    ctx.deinit();
+}
+
 const vtable = HandlerVTable{
     .handle = handle,
     .withAttrs = withAttrs,
     .withGroup = withGroup,
     .setLevel = setLevel,
     .flush = flush,
+    .close = close,
 };
 
 /// Initialize a rotating file handler.
@@ -748,6 +729,140 @@ test "RotatingFileHandler deinit closes file" {
     try std.testing.expect(ctx.file != null);
 
     ctx.deinit();
+
+    try std.testing.expect(ctx.file == null);
+}
+
+test "RotatingFileHandler message newline sanitization" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/sanitize_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 10 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "line1\nline2",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(0);
+
+    const file = try std.fs.cwd().openFile(full_path, .{});
+    defer file.close();
+    var read_buf: [4096]u8 = undefined;
+    const bytes_read = try file.readAll(&read_buf);
+    const contents = read_buf[0..bytes_read];
+
+    // Newline in message should be escaped as \n, not a raw newline
+    try std.testing.expect(std.mem.indexOf(u8, contents, "line1\\nline2") != null);
+    // Only one raw newline should exist (the line terminator)
+    var newlines: usize = 0;
+    for (contents) |c| {
+        if (c == '\n') newlines += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), newlines);
+}
+
+test "RotatingFileHandler auto-redacts sensitive key" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/autoredact_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 10 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "auto-redact test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("password", "secret123"),
+            Attr.string("username", "alice"),
+        },
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(0);
+
+    const file = try std.fs.cwd().openFile(full_path, .{});
+    defer file.close();
+    var read_buf: [4096]u8 = undefined;
+    const bytes_read = try file.readAll(&read_buf);
+    const contents = read_buf[0..bytes_read];
+
+    // "password" key should be auto-redacted
+    try std.testing.expect(std.mem.indexOf(u8, contents, "password=[REDACTED]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "secret123") == null);
+    // "username" key should pass through normally
+    try std.testing.expect(std.mem.indexOf(u8, contents, "username=alice") != null);
+    // Deliberate fail removed -- test verified as running via handler_test.zig
+}
+
+test "RotatingFileHandler close via vtable" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/close_test.log", .{path});
+
+    var ctx = try Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+
+    try std.testing.expect(ctx.file != null);
+
+    const handler = init(&ctx);
+
+    // close via the Handler vtable should invoke deinit
+    handler.close();
 
     try std.testing.expect(ctx.file == null);
 }

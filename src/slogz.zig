@@ -53,6 +53,8 @@ pub const Clock = @import("internal/clock.zig").Clock;
 
 // Formatting
 pub const rfc3339 = @import("fmt/rfc3339.zig");
+pub const json_value = @import("fmt/json_value.zig");
+pub const text_value = @import("fmt/text_value.zig");
 
 // Utilities
 pub const redact = @import("util/redact.zig");

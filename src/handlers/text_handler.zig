@@ -9,7 +9,6 @@ const std = @import("std");
 const Level = @import("../level.zig").Level;
 const Attr = @import("../value.zig").Attr;
 const Value = @import("../value.zig").Value;
-const Secret = @import("../value.zig").Secret;
 const Record = @import("../record.zig").Record;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
@@ -19,6 +18,7 @@ const rfc3339 = @import("../fmt/rfc3339.zig");
 const redact = @import("../util/redact.zig");
 const sanitize = @import("../util/sanitize.zig");
 const metrics = @import("../metrics/metrics.zig");
+const writeTextValue = @import("../fmt/text_value.zig").writeTextValue;
 
 /// Text handler context.
 pub const Context = struct {
@@ -112,45 +112,20 @@ fn writeAttr(writer: anytype, attr: Attr, prefix: []const u8) !void {
     }
 }
 
+/// Write a value for text output. Delegates to the shared writeTextValue for
+/// all variants except `.str`, which gets quoting when the string contains
+/// spaces or '=' (specific to the key=value text line format).
 fn writeValue(writer: anytype, value: Value) !void {
     switch (value) {
         .str => |s| {
-            // Quote if contains spaces
+            // Quote if contains spaces or '=' to preserve key=value parsing
             const needs_quote = std.mem.indexOfScalar(u8, s, ' ') != null or
                 std.mem.indexOfScalar(u8, s, '=') != null;
             if (needs_quote) try writer.writeByte('"');
             try sanitize.sanitizeOutput(writer, s);
             if (needs_quote) try writer.writeByte('"');
         },
-        .i64 => |i| try writer.print("{d}", .{i}),
-        .u64 => |u| try writer.print("{d}", .{u}),
-        .f64 => |f| {
-            if (std.math.isNan(f) or std.math.isInf(f)) {
-                try writer.writeAll("null");
-            } else {
-                try writer.print("{d:.6}", .{f});
-            }
-        },
-        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-        .bytes => |b| {
-            try writer.writeAll("0x");
-            const hex_chars = "0123456789abcdef";
-            for (b) |byte| {
-                try writer.writeAll(&[2]u8{ hex_chars[byte >> 4], hex_chars[byte & 0x0f] });
-            }
-        },
-        .err => |e| {
-            // Eagerly resolve error name; guard against corrupt error values
-            // that could cause @errorName to access an invalid table index.
-            const raw: u16 = @intFromError(e);
-            if (raw == 0) {
-                try writer.writeAll("error(0)");
-            } else {
-                try writer.writeAll(@errorName(e));
-            }
-        },
-        .secret => try writer.writeAll(redact.REDACTED),
-        .marshaler => try writer.writeAll("<marshaler>"),
+        else => try writeTextValue(writer, value),
     }
 }
 

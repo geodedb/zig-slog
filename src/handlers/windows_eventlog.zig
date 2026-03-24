@@ -10,7 +10,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Level = @import("../level.zig").Level;
 const Attr = @import("../value.zig").Attr;
-const Value = @import("../value.zig").Value;
 const Record = @import("../record.zig").Record;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
@@ -18,6 +17,7 @@ const HandlerError = @import("../handler.zig").HandlerError;
 const redact = @import("../util/redact.zig");
 const sanitize = @import("../util/sanitize.zig");
 const metrics = @import("../metrics/metrics.zig");
+const writeTextValue = @import("../fmt/text_value.zig").writeTextValue;
 
 /// Check if Windows Event Log is available.
 pub const is_available = builtin.os.tag == .windows;
@@ -93,7 +93,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     if (!rec.level.atLeast(ctx.level)) return;
 
     if (!is_available) {
-        return error.UnsupportedPlatform;
+        return error.FeatureDisabled;
     }
 
     ctx.mutex.lock();
@@ -106,13 +106,17 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 
-    // Append attributes (auto-redact sensitive keys)
+    // Append attributes (auto-redact sensitive keys, sanitize keys)
     for (rec.attrs) |attr| {
-        writer.print(" {s}=", .{attr.key}) catch return error.WriteFailed;
+        writer.writeByte(' ') catch return error.WriteFailed;
+        var key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
+        const key = sanitize.sanitizeKey(&key_buf, attr.key);
+        writer.writeAll(key) catch return error.WriteFailed;
+        writer.writeByte('=') catch return error.WriteFailed;
         if (redact.isSensitiveKey(attr.key)) {
             writer.writeAll(redact.REDACTED) catch return error.WriteFailed;
         } else {
-            writeValue(writer, attr.value) catch return error.WriteFailed;
+            writeTextValue(writer, attr.value) catch return error.WriteFailed;
         }
     }
 
@@ -131,43 +135,20 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         _ = &wide_msg;
     }
 
-    // Fallback: write to stderr
-    const stderr = std.fs.File.stderr().deprecatedWriter();
-    stderr.print("[{s}] {s}: {s}\n", .{ rec.level.asText(), ctx.source_name, message }) catch {};
+    // Fallback: write sanitized output to stderr using a buffer to reduce syscalls
+    var stderr_buf: [8192]u8 = undefined;
+    var stderr_stream = std.io.fixedBufferStream(&stderr_buf);
+    const stderr_writer = stderr_stream.writer();
+    stderr_writer.writeByte('[') catch {};
+    stderr_writer.writeAll(rec.level.asText()) catch {};
+    stderr_writer.writeAll("] ") catch {};
+    sanitize.sanitizeOutput(stderr_writer, ctx.source_name) catch {};
+    stderr_writer.writeAll(": ") catch {};
+    stderr_writer.writeAll(message) catch {};
+    stderr_writer.writeByte('\n') catch {};
+    std.fs.File.stderr().writeAll(stderr_stream.getWritten()) catch {};
 
     metrics.global.addBytesWritten(message.len);
-}
-
-fn writeValue(writer: anytype, value: Value) !void {
-    switch (value) {
-        .str => |s| try sanitize.sanitizeOutput(writer, s),
-        .i64 => |i| try writer.print("{d}", .{i}),
-        .u64 => |u| try writer.print("{d}", .{u}),
-        .f64 => |f| {
-            if (std.math.isNan(f) or std.math.isInf(f)) {
-                try writer.writeAll("null");
-            } else {
-                try writer.print("{d}", .{f});
-            }
-        },
-        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-        .bytes => |b| {
-            const hex_chars = "0123456789abcdef";
-            for (b) |byte| {
-                try writer.writeAll(&[2]u8{ hex_chars[byte >> 4], hex_chars[byte & 0x0f] });
-            }
-        },
-        .err => |e| {
-            const raw: u16 = @intFromError(e);
-            if (raw == 0) {
-                try writer.writeAll("error(0)");
-            } else {
-                try writer.writeAll(@errorName(e));
-            }
-        },
-        .secret => try writer.writeAll(redact.REDACTED),
-        .marshaler => try writer.writeAll("?"),
-    }
 }
 
 fn withAttrs(ctx_ptr: *anyopaque, _: []const Attr) Handler {

@@ -13,7 +13,6 @@ const json = @import("json");
 const Level = @import("../level.zig").Level;
 const Record = @import("../record.zig").Record;
 const Attr = @import("../value.zig").Attr;
-const Value = @import("../value.zig").Value;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
@@ -21,6 +20,7 @@ const Clock = @import("../internal/clock.zig").Clock;
 const rfc3339 = @import("../fmt/rfc3339.zig");
 const redact = @import("../util/redact.zig");
 const metrics = @import("../metrics/metrics.zig");
+const writeJsonValue = @import("../fmt/json_value.zig").writeJsonValue;
 
 /// UDP sink options.
 pub const UdpOptions = struct {
@@ -85,54 +85,12 @@ pub const Context = struct {
     }
 };
 
-/// Write an attribute value as JSON.
-fn writeJsonValue(enc: anytype, value: Value) !void {
-    switch (value) {
-        .str => |s| enc.writeString(s) catch return error.WriteFailed,
-        .i64 => |i| enc.writeInt(i) catch return error.WriteFailed,
-        .u64 => |u| enc.writeInt(u) catch return error.WriteFailed,
-        .f64 => |f| {
-            if (std.math.isNan(f) or std.math.isInf(f)) {
-                enc.writeNull() catch return error.WriteFailed;
-            } else {
-                enc.writeFloat(f) catch return error.WriteFailed;
-            }
-        },
-        .bool => |b| enc.writeBool(b) catch return error.WriteFailed,
-        .secret => enc.writeString(redact.REDACTED) catch return error.WriteFailed,
-        .err => |e| {
-            const raw: u16 = @intFromError(e);
-            if (raw == 0) {
-                enc.writeString("error(0)") catch return error.WriteFailed;
-            } else {
-                enc.writeString(@errorName(e)) catch return error.WriteFailed;
-            }
-        },
-        .bytes => |bytes| {
-            var hex_buf: [512]u8 = undefined;
-            var hex_len: usize = 0;
-            const hex_chars = "0123456789abcdef";
-            for (bytes) |byte| {
-                if (hex_len + 2 > hex_buf.len) break;
-                hex_buf[hex_len] = hex_chars[byte >> 4];
-                hex_buf[hex_len + 1] = hex_chars[byte & 0x0f];
-                hex_len += 2;
-            }
-            enc.writeString(hex_buf[0..hex_len]) catch return error.WriteFailed;
-        },
-        .marshaler => enc.writeNull() catch return error.WriteFailed,
-    }
-}
-
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
     if (!rec.level.atLeast(ctx.level)) return;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
-
-    // Format record as JSON (no newline for UDP)
+    // Format record as JSON OUTSIDE the mutex (matches tcp_sink / http_sink pattern)
     var buf: [8192]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
@@ -178,7 +136,13 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     enc.endObject() catch return error.WriteFailed;
 
-    ctx.send(fbs.getWritten()) catch {
+    const output = fbs.getWritten();
+
+    // Lock only for the network send
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    ctx.send(output) catch {
         metrics.global.incErrors();
         return error.WriteFailed;
     };

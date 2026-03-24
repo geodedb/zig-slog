@@ -545,6 +545,38 @@ test "SyslogHandler - structured data escaping" {
     try std.testing.expect(std.mem.indexOf(u8, output, "\\\\") != null);
 }
 
+test "SyslogHandler - control character escaping in SD values" {
+    var buf: [2048]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+        .hostname = "host",
+    });
+    const handler = slogz.syslog.init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("data", "line1\nline2\x00end"),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    // Control chars should be escaped as \xHH
+    try std.testing.expect(std.mem.indexOf(u8, output, "\\x0a") != null); // \n
+    try std.testing.expect(std.mem.indexOf(u8, output, "\\x00") != null); // NUL
+    // Raw control chars should not appear in SD values
+    try std.testing.expect(std.mem.indexOfScalar(u8, output, '\x00') == null);
+}
+
 test "SyslogHandler - all facility types" {
     const facilities = [_]slogz.syslog.Facility{
         .kern, .user, .mail, .daemon, .auth, .syslog, .lpr, .news,
@@ -627,6 +659,143 @@ test "SyslogHandler - nilvalue for missing fields" {
     const output = fbs.getWritten();
     // Should have multiple NILVALUE markers
     try std.testing.expect(std.mem.indexOf(u8, output, "- - - -") != null);
+}
+
+// ============================================================================
+// Rotating File Handler Tests
+// ============================================================================
+
+test "RotatingFileHandler - message newline sanitization" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/sanitize_test.log", .{path});
+
+    var ctx = try slogz.rotating_file.Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 10 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = slogz.rotating_file.init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "line1\nline2",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(0);
+
+    const file = try std.fs.cwd().openFile(full_path, .{});
+    defer file.close();
+    var read_buf: [4096]u8 = undefined;
+    const bytes_read = try file.readAll(&read_buf);
+    const contents = read_buf[0..bytes_read];
+
+    // Newline in message should be escaped, not a raw newline
+    try std.testing.expect(std.mem.indexOf(u8, contents, "line1\\nline2") != null);
+    // Only one raw newline (the line terminator)
+    var newlines: usize = 0;
+    for (contents) |c| {
+        if (c == '\n') newlines += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), newlines);
+}
+
+test "RotatingFileHandler - auto-redacts sensitive key" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/autoredact_test.log", .{path});
+
+    var ctx = try slogz.rotating_file.Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 10 * 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+    defer ctx.deinit();
+
+    const handler = slogz.rotating_file.init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "auto-redact test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("password", "secret123"),
+            Attr.string("username", "alice"),
+        },
+    };
+
+    try handler.handle(&rec);
+    try handler.flush(0);
+
+    const file = try std.fs.cwd().openFile(full_path, .{});
+    defer file.close();
+    var read_buf: [4096]u8 = undefined;
+    const bytes_read = try file.readAll(&read_buf);
+    const contents = read_buf[0..bytes_read];
+
+    // "password" key should be auto-redacted
+    try std.testing.expect(std.mem.indexOf(u8, contents, "password=[REDACTED]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "secret123") == null);
+    // "username" key should pass through normally
+    try std.testing.expect(std.mem.indexOf(u8, contents, "username=alice") != null);
+}
+
+test "RotatingFileHandler - close via vtable" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(path);
+
+    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/close_test.log", .{path});
+
+    var ctx = try slogz.rotating_file.Context.init(allocator, .{
+        .path = full_path,
+        .max_bytes = 1024,
+        .max_backups = 2,
+        .max_age_days = 1,
+    }, .info, Clock.system());
+
+    try std.testing.expect(ctx.file != null);
+
+    const handler = slogz.rotating_file.init(&ctx);
+
+    // close via the Handler vtable should invoke deinit
+    handler.close();
+
+    try std.testing.expect(ctx.file == null);
 }
 
 // ============================================================================

@@ -10,7 +10,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Level = @import("../level.zig").Level;
 const Attr = @import("../value.zig").Attr;
-const Value = @import("../value.zig").Value;
 const Record = @import("../record.zig").Record;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
@@ -18,9 +17,16 @@ const HandlerError = @import("../handler.zig").HandlerError;
 const redact = @import("../util/redact.zig");
 const sanitize = @import("../util/sanitize.zig");
 const metrics = @import("../metrics/metrics.zig");
+const writeTextValue = @import("../fmt/text_value.zig").writeTextValue;
 
 /// Check if journald is available (Linux only).
 pub const is_available = builtin.os.tag == .linux;
+
+/// Whether the native sd_journal_sendv integration is implemented.
+/// When false, the handler skips building journald field buffers (~25KB
+/// stack allocation) and goes straight to the stderr fallback.
+/// Set to true once sd_journal_sendv is linked (see issue #4).
+const native_sendv_available = false;
 
 // Journald priority levels (same as syslog)
 const LOG_EMERG = 0;
@@ -64,83 +70,88 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     if (!rec.level.atLeast(ctx.level)) return;
 
     if (!is_available) {
-        return error.UnsupportedPlatform;
+        return error.FeatureDisabled;
     }
 
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
 
-    // Build fields for journald
-    // Format: FIELD=value (uppercase field names)
-    var fields_buf: [32][512]u8 = undefined;
-    var field_ptrs: [32][*:0]const u8 = undefined;
-    var field_count: usize = 0;
-
-    // MESSAGE (required)
-    const msg_field = std.fmt.bufPrintZ(&fields_buf[field_count], "MESSAGE={s}", .{rec.message}) catch return error.WriteFailed;
-    field_ptrs[field_count] = msg_field.ptr;
-    field_count += 1;
-
-    // PRIORITY
     const priority = levelToPriority(rec.level);
-    const pri_field = std.fmt.bufPrintZ(&fields_buf[field_count], "PRIORITY={d}", .{priority}) catch return error.WriteFailed;
-    field_ptrs[field_count] = pri_field.ptr;
-    field_count += 1;
 
-    // SYSLOG_IDENTIFIER
-    if (ctx.syslog_identifier.len > 0) {
-        const ident_field = std.fmt.bufPrintZ(&fields_buf[field_count], "SYSLOG_IDENTIFIER={s}", .{ctx.syslog_identifier}) catch return error.WriteFailed;
-        field_ptrs[field_count] = ident_field.ptr;
-        field_count += 1;
-    } else if (rec.logger.len > 0) {
-        const ident_field = std.fmt.bufPrintZ(&fields_buf[field_count], "SYSLOG_IDENTIFIER={s}", .{rec.logger}) catch return error.WriteFailed;
-        field_ptrs[field_count] = ident_field.ptr;
-        field_count += 1;
-    }
+    // When native sd_journal_sendv is available, build journald field buffers
+    // and send via the native API. This block is dead-code-eliminated at
+    // comptime until native_sendv_available is set to true (issue #4).
+    if (native_sendv_available) {
+        // Build fields for journald
+        // Format: FIELD=value (uppercase field names)
+        var fields_buf: [32][512]u8 = undefined;
+        var field_ptrs: [32][*:0]const u8 = undefined;
+        var field_count: usize = 0;
 
-    // CODE_FILE and CODE_LINE (if present)
-    if (rec.source_file.len > 0) {
-        const file_field = std.fmt.bufPrintZ(&fields_buf[field_count], "CODE_FILE={s}", .{rec.source_file}) catch return error.WriteFailed;
-        field_ptrs[field_count] = file_field.ptr;
+        // MESSAGE (required)
+        const msg_field = std.fmt.bufPrintZ(&fields_buf[field_count], "MESSAGE={s}", .{rec.message}) catch return error.WriteFailed;
+        field_ptrs[field_count] = msg_field.ptr;
         field_count += 1;
 
-        const line_field = std.fmt.bufPrintZ(&fields_buf[field_count], "CODE_LINE={d}", .{rec.source_line}) catch return error.WriteFailed;
-        field_ptrs[field_count] = line_field.ptr;
+        // PRIORITY
+        const pri_field = std.fmt.bufPrintZ(&fields_buf[field_count], "PRIORITY={d}", .{priority}) catch return error.WriteFailed;
+        field_ptrs[field_count] = pri_field.ptr;
         field_count += 1;
-    }
 
-    // Custom attributes
-    for (rec.attrs) |attr| {
-        if (field_count >= fields_buf.len - 1) break;
-
-        // Uppercase key for journald
-        var key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
-        const key = sanitize.sanitizeKey(&key_buf, attr.key);
-        var upper_key: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
-        for (key, 0..) |c, i| {
-            upper_key[i] = std.ascii.toUpper(c);
+        // SYSLOG_IDENTIFIER
+        if (ctx.syslog_identifier.len > 0) {
+            const ident_field = std.fmt.bufPrintZ(&fields_buf[field_count], "SYSLOG_IDENTIFIER={s}", .{ctx.syslog_identifier}) catch return error.WriteFailed;
+            field_ptrs[field_count] = ident_field.ptr;
+            field_count += 1;
+        } else if (rec.logger.len > 0) {
+            const ident_field = std.fmt.bufPrintZ(&fields_buf[field_count], "SYSLOG_IDENTIFIER={s}", .{rec.logger}) catch return error.WriteFailed;
+            field_ptrs[field_count] = ident_field.ptr;
+            field_count += 1;
         }
 
-        // Format value (auto-redact sensitive keys)
-        var val_buf: [256]u8 = undefined;
-        var val_fbs = std.io.fixedBufferStream(&val_buf);
-        const val_writer = val_fbs.writer();
-        if (redact.isSensitiveKey(attr.key)) {
-            val_writer.writeAll(redact.REDACTED) catch continue;
-        } else {
-            writeValue(val_writer, attr.value) catch continue;
+        // CODE_FILE and CODE_LINE (if present)
+        if (rec.source_file.len > 0) {
+            const file_field = std.fmt.bufPrintZ(&fields_buf[field_count], "CODE_FILE={s}", .{rec.source_file}) catch return error.WriteFailed;
+            field_ptrs[field_count] = file_field.ptr;
+            field_count += 1;
+
+            const line_field = std.fmt.bufPrintZ(&fields_buf[field_count], "CODE_LINE={d}", .{rec.source_line}) catch return error.WriteFailed;
+            field_ptrs[field_count] = line_field.ptr;
+            field_count += 1;
         }
 
-        const attr_field = std.fmt.bufPrintZ(&fields_buf[field_count], "{s}={s}", .{ upper_key[0..key.len], val_fbs.getWritten() }) catch continue;
-        field_ptrs[field_count] = attr_field.ptr;
-        field_count += 1;
+        // Custom attributes
+        for (rec.attrs) |attr| {
+            if (field_count >= fields_buf.len - 1) break;
+
+            // Uppercase key for journald
+            var key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
+            const key = sanitize.sanitizeKey(&key_buf, attr.key);
+            var upper_key: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
+            for (key, 0..) |c, i| {
+                upper_key[i] = std.ascii.toUpper(c);
+            }
+
+            // Format value (auto-redact sensitive keys)
+            var val_buf: [256]u8 = undefined;
+            var val_fbs = std.io.fixedBufferStream(&val_buf);
+            const val_writer = val_fbs.writer();
+            if (redact.isSensitiveKey(attr.key)) {
+                val_writer.writeAll(redact.REDACTED) catch continue;
+            } else {
+                writeTextValue(val_writer, attr.value) catch continue;
+            }
+
+            const attr_field = std.fmt.bufPrintZ(&fields_buf[field_count], "{s}={s}", .{ upper_key[0..key.len], val_fbs.getWritten() }) catch continue;
+            field_ptrs[field_count] = attr_field.ptr;
+            field_count += 1;
+        }
+
+        // TODO(issue #4): call sd_journal_sendv(field_ptrs[0..field_count]) here
+        return;
     }
 
-    // Call sd_journal_sendv or fall back to writing to /dev/log
-    // For now, we write to stderr as a fallback when libsystemd isn't linked
-    // Real implementation would use: sd_journal_sendv(iov, field_count)
-
-    // Fallback: write structured message to stderr using a buffer to reduce syscalls
+    // Stderr fallback: write structured message using a buffer to reduce syscalls.
     var stderr_buf: [8192]u8 = undefined;
     var stderr_stream = std.io.fixedBufferStream(&stderr_buf);
     const stderr_writer = stderr_stream.writer();
@@ -150,11 +161,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     }
     sanitize.sanitizeOutput(stderr_writer, rec.message) catch {};
     for (rec.attrs) |attr| {
-        stderr_writer.print(" {s}=", .{attr.key}) catch {};
+        stderr_writer.writeByte(' ') catch {};
+        var stderr_key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
+        const stderr_key = sanitize.sanitizeKey(&stderr_key_buf, attr.key);
+        stderr_writer.writeAll(stderr_key) catch {};
+        stderr_writer.writeByte('=') catch {};
         if (redact.isSensitiveKey(attr.key)) {
             stderr_writer.writeAll(redact.REDACTED) catch {};
         } else {
-            writeValue(stderr_writer, attr.value) catch {};
+            writeTextValue(stderr_writer, attr.value) catch {};
         }
     }
     stderr_writer.writeByte('\n') catch {};
@@ -162,38 +177,6 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     stderr.writeAll(stderr_stream.getWritten()) catch {};
 
     metrics.global.addBytesWritten(rec.message.len);
-}
-
-fn writeValue(writer: anytype, value: Value) !void {
-    switch (value) {
-        .str => |s| try sanitize.sanitizeOutput(writer, s),
-        .i64 => |i| try writer.print("{d}", .{i}),
-        .u64 => |u| try writer.print("{d}", .{u}),
-        .f64 => |f| {
-            if (std.math.isNan(f) or std.math.isInf(f)) {
-                try writer.writeAll("null");
-            } else {
-                try writer.print("{d}", .{f});
-            }
-        },
-        .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-        .bytes => |b| {
-            const hex_chars = "0123456789abcdef";
-            for (b) |byte| {
-                try writer.writeAll(&[2]u8{ hex_chars[byte >> 4], hex_chars[byte & 0x0f] });
-            }
-        },
-        .err => |e| {
-            const raw: u16 = @intFromError(e);
-            if (raw == 0) {
-                try writer.writeAll("error(0)");
-            } else {
-                try writer.writeAll(@errorName(e));
-            }
-        },
-        .secret => try writer.writeAll(redact.REDACTED),
-        .marshaler => try writer.writeAll("?"),
-    }
 }
 
 fn withAttrs(ctx_ptr: *anyopaque, _: []const Attr) Handler {

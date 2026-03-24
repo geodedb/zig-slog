@@ -264,13 +264,20 @@ fn writeSDValue(writer: anytype, value: Value) !void {
 }
 
 /// Write string with RFC5424 structured-data escaping.
-/// Must escape: \ " ]
+/// Must escape: \ " ] and control characters (< 0x20, except 0x09 tab).
 fn writeSDString(writer: anytype, s: []const u8) !void {
+    const hex_chars = "0123456789abcdef";
     for (s) |c| {
         switch (c) {
             '\\' => try writer.writeAll("\\\\"),
             '"' => try writer.writeAll("\\\""),
             ']' => try writer.writeAll("\\]"),
+            '\t' => try writer.writeByte(c), // tab allowed in RFC5424
+            0x00...0x08, 0x0a...0x1f => {
+                // Escape control characters as \xHH
+                try writer.writeAll("\\x");
+                try writer.writeAll(&[2]u8{ hex_chars[c >> 4], hex_chars[c & 0x0f] });
+            },
             else => try writer.writeByte(c),
         }
     }

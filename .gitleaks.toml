@@ -8,4 +8,6 @@ useDefault = true
 [allowlist]
 paths = [
     '''examples/secret_redaction\.zig''',
+    '''examples/json_logging\.zig''',
+    '''tests/accept\.zig''',
 ]
