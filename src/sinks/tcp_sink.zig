@@ -13,11 +13,13 @@ const json = @import("json");
 const Level = @import("../level.zig").Level;
 const Record = @import("../record.zig").Record;
 const Attr = @import("../value.zig").Attr;
+const Value = @import("../value.zig").Value;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
 const Clock = @import("../internal/clock.zig").Clock;
 const rfc3339 = @import("../fmt/rfc3339.zig");
+const redact = @import("../util/redact.zig");
 const metrics = @import("../metrics/metrics.zig");
 
 /// TCP sink options.
@@ -39,6 +41,12 @@ pub const Context = struct {
     clock: Clock,
     mutex: std.Thread.Mutex,
     consecutive_failures: u32,
+    circuit_open_until: i64,
+
+    /// Circuit breaker threshold: number of consecutive failures before opening circuit.
+    const circuit_breaker_threshold: u32 = 3;
+    /// Circuit breaker cooldown period in milliseconds.
+    const circuit_cooldown_ms: i64 = 30_000;
 
     pub fn init(allocator: std.mem.Allocator, options: TcpOptions, level: Level, clock: Clock) Context {
         return .{
@@ -49,6 +57,7 @@ pub const Context = struct {
             .clock = clock,
             .mutex = .{},
             .consecutive_failures = 0,
+            .circuit_open_until = 0,
         };
     }
 
@@ -71,10 +80,25 @@ pub const Context = struct {
                 return error.ConnectionFailed;
             };
             self.stream = std.net.tcpConnectToAddress(addr) catch return error.ConnectionFailed;
+            self.applySocketTimeouts();
             return;
         };
 
         self.stream = std.net.tcpConnectToAddress(address) catch return error.ConnectionFailed;
+        self.applySocketTimeouts();
+    }
+
+    /// Apply send/receive timeouts to the connected socket.
+    fn applySocketTimeouts(self: *Context) void {
+        if (self.stream) |s| {
+            const timeout_ms = self.options.connect_timeout_ms;
+            const timeval = std.posix.timeval{
+                .sec = @intCast(timeout_ms / 1000),
+                .usec = @intCast((timeout_ms % 1000) * 1000),
+            };
+            std.posix.setsockopt(s.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeval)) catch {};
+            std.posix.setsockopt(s.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeval)) catch {};
+        }
     }
 
     fn disconnect(self: *Context) void {
@@ -85,6 +109,12 @@ pub const Context = struct {
     }
 
     fn writeWithRetry(self: *Context, data: []const u8) !void {
+        // Circuit breaker: fast-fail during cooldown period
+        const now = std.time.milliTimestamp();
+        if (self.consecutive_failures >= circuit_breaker_threshold and now < self.circuit_open_until) {
+            return error.WriteFailed;
+        }
+
         var backoff: u32 = self.options.initial_backoff_ms;
         var attempts: u8 = 0;
 
@@ -112,25 +142,65 @@ pub const Context = struct {
                 };
 
                 self.consecutive_failures = 0;
+                self.circuit_open_until = 0;
                 metrics.global.addBytesWritten(data.len);
                 return;
             }
         }
 
         self.consecutive_failures += 1;
+        if (self.consecutive_failures >= circuit_breaker_threshold) {
+            self.circuit_open_until = std.time.milliTimestamp() + circuit_cooldown_ms;
+        }
         return error.WriteFailed;
     }
 };
+
+/// Write an attribute value as JSON.
+fn writeJsonValue(enc: anytype, value: Value) !void {
+    switch (value) {
+        .str => |s| enc.writeString(s) catch return error.WriteFailed,
+        .i64 => |i| enc.writeInt(i) catch return error.WriteFailed,
+        .u64 => |u| enc.writeInt(u) catch return error.WriteFailed,
+        .f64 => |f| {
+            if (std.math.isNan(f) or std.math.isInf(f)) {
+                enc.writeNull() catch return error.WriteFailed;
+            } else {
+                enc.writeFloat(f) catch return error.WriteFailed;
+            }
+        },
+        .bool => |b| enc.writeBool(b) catch return error.WriteFailed,
+        .secret => enc.writeString(redact.REDACTED) catch return error.WriteFailed,
+        .err => |e| {
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                enc.writeString("error(0)") catch return error.WriteFailed;
+            } else {
+                enc.writeString(@errorName(e)) catch return error.WriteFailed;
+            }
+        },
+        .bytes => |bytes| {
+            var hex_buf: [512]u8 = undefined;
+            var hex_len: usize = 0;
+            const hex_chars = "0123456789abcdef";
+            for (bytes) |byte| {
+                if (hex_len + 2 > hex_buf.len) break;
+                hex_buf[hex_len] = hex_chars[byte >> 4];
+                hex_buf[hex_len + 1] = hex_chars[byte & 0x0f];
+                hex_len += 2;
+            }
+            enc.writeString(hex_buf[0..hex_len]) catch return error.WriteFailed;
+        },
+        .marshaler => enc.writeNull() catch return error.WriteFailed,
+    }
+}
 
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
     if (!rec.level.atLeast(ctx.level)) return;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
-
-    // Format record as JSON line
+    // Format record as JSON line OUTSIDE the mutex
     var buf: [16384]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
@@ -164,10 +234,26 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         enc.writeString(rec.logger) catch return error.WriteFailed;
     }
 
+    // attrs
+    for (rec.attrs) |attr| {
+        enc.writeKey(attr.key) catch return error.WriteFailed;
+        if (redact.isSensitiveKey(attr.key)) {
+            enc.writeString(redact.REDACTED) catch return error.WriteFailed;
+        } else {
+            writeJsonValue(&enc, attr.value) catch return error.WriteFailed;
+        }
+    }
+
     enc.endObject() catch return error.WriteFailed;
     writer.writeByte('\n') catch return error.WriteFailed;
 
-    ctx.writeWithRetry(fbs.getWritten()) catch |err| {
+    const output = fbs.getWritten();
+
+    // Lock only for the network write
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    ctx.writeWithRetry(output) catch |err| {
         metrics.global.incErrors();
         return switch (err) {
             error.ConnectionFailed => error.ConnectionFailed,

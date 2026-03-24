@@ -135,6 +135,53 @@ pub fn truncate(buf: []u8, input: []const u8, max_len: usize) []const u8 {
     return buf[0..max_len];
 }
 
+/// Sanitizes output by replacing control characters with escape sequences.
+/// Prevents log injection via newlines and other control characters.
+pub fn sanitizeOutput(writer: anytype, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f => {
+                try writer.print("\\x{x:0>2}", .{c});
+            },
+            else => try writer.writeByte(c),
+        }
+    }
+}
+
+test "sanitizeOutput" {
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const writer = fbs.writer();
+
+    // Normal text passes through
+    try sanitizeOutput(writer, "hello world");
+    try std.testing.expectEqualStrings("hello world", fbs.getWritten());
+
+    // Reset
+    fbs.reset();
+
+    // Newlines are escaped
+    try sanitizeOutput(writer, "line1\nline2\rline3");
+    try std.testing.expectEqualStrings("line1\\nline2\\rline3", fbs.getWritten());
+
+    // Reset
+    fbs.reset();
+
+    // Tab is escaped
+    try sanitizeOutput(writer, "key\tvalue");
+    try std.testing.expectEqualStrings("key\\tvalue", fbs.getWritten());
+
+    // Reset
+    fbs.reset();
+
+    // NUL byte is escaped
+    try sanitizeOutput(writer, "before\x00after");
+    try std.testing.expectEqualStrings("before\\x00after", fbs.getWritten());
+}
+
 test "sanitizeKey" {
     var buf: [MAX_KEY_LENGTH]u8 = undefined;
 

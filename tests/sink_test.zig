@@ -219,15 +219,11 @@ test "HttpSink - HTTP URL parsing" {
 test "HttpSink - HTTPS URL parsing" {
     const allocator = std.testing.allocator;
 
-    var ctx = try http.Context.init(allocator, .{
+    // HTTPS is rejected because TLS is not implemented
+    const result = http.Context.init(allocator, .{
         .url = "https://api.example.com/v1/logs",
     }, .info, Clock.system());
-    defer ctx.deinit();
-
-    try std.testing.expectEqualStrings("api.example.com", ctx.host);
-    try std.testing.expectEqual(@as(u16, 443), ctx.port);
-    try std.testing.expectEqualStrings("/v1/logs", ctx.path);
-    try std.testing.expect(ctx.is_https);
+    try std.testing.expectError(error.HttpsNotSupported, result);
 }
 
 test "HttpSink - URL without path" {
@@ -257,12 +253,11 @@ test "HttpSink - default port for HTTP" {
 test "HttpSink - default port for HTTPS" {
     const allocator = std.testing.allocator;
 
-    var ctx = try http.Context.init(allocator, .{
+    // HTTPS is rejected because TLS is not implemented
+    const result = http.Context.init(allocator, .{
         .url = "https://secure.example.com/logs",
     }, .info, Clock.system());
-    defer ctx.deinit();
-
-    try std.testing.expectEqual(@as(u16, 443), ctx.port);
+    try std.testing.expectError(error.HttpsNotSupported, result);
 }
 
 test "HttpSink - invalid URL scheme" {

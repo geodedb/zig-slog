@@ -184,9 +184,9 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         writer.writeByte('-') catch return error.WriteFailed;
     }
 
-    // MSG (BOM optional, we skip it)
+    // MSG (BOM optional, we skip it; sanitize to prevent log injection)
     writer.writeByte(' ') catch return error.WriteFailed;
-    writer.writeAll(rec.message) catch return error.WriteFailed;
+    sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
     writer.writeByte('\n') catch return error.WriteFailed;
 
     const output = fbs.getWritten();
@@ -221,8 +221,12 @@ fn writeStructuredDataParam(writer: anytype, attr: Attr) !void {
     try writer.writeAll(key);
     try writer.writeAll("=\"");
 
-    // Value (escaped per RFC5424: \, ", ])
-    try writeSDValue(writer, attr.value);
+    // Auto-redact sensitive keys; otherwise escape per RFC5424
+    if (redact.isSensitiveKey(attr.key)) {
+        try writer.writeAll(redact.REDACTED);
+    } else {
+        try writeSDValue(writer, attr.value);
+    }
     try writer.writeByte('"');
 }
 
@@ -241,11 +245,19 @@ fn writeSDValue(writer: anytype, value: Value) !void {
         },
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .bytes => |b| {
+            const hex_chars = "0123456789abcdef";
             for (b) |byte| {
-                try writer.print("{x:0>2}", .{byte});
+                try writer.writeAll(&[2]u8{ hex_chars[byte >> 4], hex_chars[byte & 0x0f] });
             }
         },
-        .err => |e| try writer.writeAll(@errorName(e)),
+        .err => |e| {
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                try writer.writeAll("error(0)");
+            } else {
+                try writer.writeAll(@errorName(e));
+            }
+        },
         .secret => try writer.writeAll(redact.REDACTED),
         .marshaler => try writer.writeAll("?"),
     }

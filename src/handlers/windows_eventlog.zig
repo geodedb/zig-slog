@@ -16,6 +16,7 @@ const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
 const redact = @import("../util/redact.zig");
+const sanitize = @import("../util/sanitize.zig");
 const metrics = @import("../metrics/metrics.zig");
 
 /// Check if Windows Event Log is available.
@@ -103,12 +104,16 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     var fbs = std.io.fixedBufferStream(&msg_buf);
     const writer = fbs.writer();
 
-    writer.writeAll(rec.message) catch return error.WriteFailed;
+    sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 
-    // Append attributes
+    // Append attributes (auto-redact sensitive keys)
     for (rec.attrs) |attr| {
         writer.print(" {s}=", .{attr.key}) catch return error.WriteFailed;
-        writeValue(writer, attr.value) catch return error.WriteFailed;
+        if (redact.isSensitiveKey(attr.key)) {
+            writer.writeAll(redact.REDACTED) catch return error.WriteFailed;
+        } else {
+            writeValue(writer, attr.value) catch return error.WriteFailed;
+        }
     }
 
     const message = fbs.getWritten();
@@ -135,7 +140,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
 fn writeValue(writer: anytype, value: Value) !void {
     switch (value) {
-        .str => |s| try writer.writeAll(s),
+        .str => |s| try sanitize.sanitizeOutput(writer, s),
         .i64 => |i| try writer.print("{d}", .{i}),
         .u64 => |u| try writer.print("{d}", .{u}),
         .f64 => |f| {
@@ -147,11 +152,19 @@ fn writeValue(writer: anytype, value: Value) !void {
         },
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .bytes => |b| {
+            const hex_chars = "0123456789abcdef";
             for (b) |byte| {
-                try writer.print("{x:0>2}", .{byte});
+                try writer.writeAll(&[2]u8{ hex_chars[byte >> 4], hex_chars[byte & 0x0f] });
             }
         },
-        .err => |e| try writer.writeAll(@errorName(e)),
+        .err => |e| {
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                try writer.writeAll("error(0)");
+            } else {
+                try writer.writeAll(@errorName(e));
+            }
+        },
         .secret => try writer.writeAll(redact.REDACTED),
         .marshaler => try writer.writeAll("?"),
     }

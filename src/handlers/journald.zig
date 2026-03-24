@@ -121,11 +121,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
             upper_key[i] = std.ascii.toUpper(c);
         }
 
-        // Format value
+        // Format value (auto-redact sensitive keys)
         var val_buf: [256]u8 = undefined;
         var val_fbs = std.io.fixedBufferStream(&val_buf);
         const val_writer = val_fbs.writer();
-        writeValue(val_writer, attr.value) catch continue;
+        if (redact.isSensitiveKey(attr.key)) {
+            val_writer.writeAll(redact.REDACTED) catch continue;
+        } else {
+            writeValue(val_writer, attr.value) catch continue;
+        }
 
         const attr_field = std.fmt.bufPrintZ(&fields_buf[field_count], "{s}={s}", .{ upper_key[0..key.len], val_fbs.getWritten() }) catch continue;
         field_ptrs[field_count] = attr_field.ptr;
@@ -136,25 +140,33 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     // For now, we write to stderr as a fallback when libsystemd isn't linked
     // Real implementation would use: sd_journal_sendv(iov, field_count)
 
-    // Fallback: write structured message to stderr
-    const stderr = std.fs.File.stderr().deprecatedWriter();
-    stderr.print("<{d}>", .{priority}) catch {};
+    // Fallback: write structured message to stderr using a buffer to reduce syscalls
+    var stderr_buf: [8192]u8 = undefined;
+    var stderr_stream = std.io.fixedBufferStream(&stderr_buf);
+    const stderr_writer = stderr_stream.writer();
+    stderr_writer.print("<{d}>", .{priority}) catch {};
     if (ctx.syslog_identifier.len > 0) {
-        stderr.print("{s}: ", .{ctx.syslog_identifier}) catch {};
+        stderr_writer.print("{s}: ", .{ctx.syslog_identifier}) catch {};
     }
-    stderr.print("{s}", .{rec.message}) catch {};
+    sanitize.sanitizeOutput(stderr_writer, rec.message) catch {};
     for (rec.attrs) |attr| {
-        stderr.print(" {s}=", .{attr.key}) catch {};
-        writeValue(stderr, attr.value) catch {};
+        stderr_writer.print(" {s}=", .{attr.key}) catch {};
+        if (redact.isSensitiveKey(attr.key)) {
+            stderr_writer.writeAll(redact.REDACTED) catch {};
+        } else {
+            writeValue(stderr_writer, attr.value) catch {};
+        }
     }
-    stderr.writeByte('\n') catch {};
+    stderr_writer.writeByte('\n') catch {};
+    const stderr = std.io.getStdErr();
+    stderr.writeAll(stderr_stream.getWritten()) catch {};
 
     metrics.global.addBytesWritten(rec.message.len);
 }
 
 fn writeValue(writer: anytype, value: Value) !void {
     switch (value) {
-        .str => |s| try writer.writeAll(s),
+        .str => |s| try sanitize.sanitizeOutput(writer, s),
         .i64 => |i| try writer.print("{d}", .{i}),
         .u64 => |u| try writer.print("{d}", .{u}),
         .f64 => |f| {
@@ -166,11 +178,19 @@ fn writeValue(writer: anytype, value: Value) !void {
         },
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .bytes => |b| {
+            const hex_chars = "0123456789abcdef";
             for (b) |byte| {
-                try writer.print("{x:0>2}", .{byte});
+                try writer.writeAll(&[2]u8{ hex_chars[byte >> 4], hex_chars[byte & 0x0f] });
             }
         },
-        .err => |e| try writer.writeAll(@errorName(e)),
+        .err => |e| {
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                try writer.writeAll("error(0)");
+            } else {
+                try writer.writeAll(@errorName(e));
+            }
+        },
         .secret => try writer.writeAll(redact.REDACTED),
         .marshaler => try writer.writeAll("?"),
     }

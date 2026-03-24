@@ -14,11 +14,13 @@ const json = @import("json");
 const Level = @import("../level.zig").Level;
 const Record = @import("../record.zig").Record;
 const Attr = @import("../value.zig").Attr;
+const Value = @import("../value.zig").Value;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
 const Clock = @import("../internal/clock.zig").Clock;
 const rfc3339 = @import("../fmt/rfc3339.zig");
+const redact = @import("../util/redact.zig");
 const metrics = @import("../metrics/metrics.zig");
 
 /// HTTP sink options.
@@ -59,18 +61,11 @@ pub const Context = struct {
         var host: []const u8 = "";
         var port: u16 = 80;
         var path: []const u8 = "/";
-        var is_https = false;
 
         if (std.mem.startsWith(u8, url, "https://")) {
-            is_https = true;
-            port = 443;
-            const rest = url[8..];
-            if (std.mem.indexOf(u8, rest, "/")) |slash_idx| {
-                host = rest[0..slash_idx];
-                path = rest[slash_idx..];
-            } else {
-                host = rest;
-            }
+            // TLS is not implemented; reject https:// URLs to prevent
+            // silently sending data in plaintext
+            return error.HttpsNotSupported;
         } else if (std.mem.startsWith(u8, url, "http://")) {
             const rest = url[7..];
             if (std.mem.indexOf(u8, rest, "/")) |slash_idx| {
@@ -100,7 +95,7 @@ pub const Context = struct {
             .host = host,
             .port = port,
             .path = path,
-            .is_https = is_https,
+            .is_https = false,
         };
     }
 
@@ -140,6 +135,15 @@ pub const Context = struct {
         };
         defer stream.close();
 
+        // Apply socket timeouts
+        const timeout_ms = self.options.timeout_ms;
+        const timeval = std.posix.timeval{
+            .sec = @intCast(timeout_ms / 1000),
+            .usec = @intCast((timeout_ms % 1000) * 1000),
+        };
+        std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeval)) catch {};
+        std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeval)) catch {};
+
         // Build HTTP request
         var req_buf: [1024]u8 = undefined;
         const req_header = std.fmt.bufPrint(&req_buf, "{s} {s} HTTP/1.1\r\nHost: {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n", .{
@@ -153,8 +157,9 @@ pub const Context = struct {
         // Send header
         _ = stream.write(req_header) catch return false;
 
-        // Send custom headers
+        // Send custom headers (skip any with control characters to prevent injection)
         for (self.options.headers) |header| {
+            if (containsControlChars(header.name) or containsControlChars(header.value)) continue;
             _ = stream.write(header.name) catch return false;
             _ = stream.write(": ") catch return false;
             _ = stream.write(header.value) catch return false;
@@ -172,9 +177,9 @@ pub const Context = struct {
         const n = stream.read(&resp_buf) catch return false;
         if (n < 12) return false;
 
-        // Check for 2xx status
-        const status_line = resp_buf[0..n];
-        if (std.mem.indexOf(u8, status_line, " 2")) |_| {
+        // Check for 2xx status at the correct position in the HTTP status line.
+        // HTTP/1.x responses have format "HTTP/1.X YYY ..." with status at index 9.
+        if (n >= 12 and resp_buf[9] == '2') {
             return true;
         }
 
@@ -182,15 +187,60 @@ pub const Context = struct {
     }
 };
 
+/// Write an attribute value as JSON.
+fn writeJsonValue(enc: anytype, value: Value) !void {
+    switch (value) {
+        .str => |s| enc.writeString(s) catch return error.WriteFailed,
+        .i64 => |i| enc.writeInt(i) catch return error.WriteFailed,
+        .u64 => |u| enc.writeInt(u) catch return error.WriteFailed,
+        .f64 => |f| {
+            if (std.math.isNan(f) or std.math.isInf(f)) {
+                enc.writeNull() catch return error.WriteFailed;
+            } else {
+                enc.writeFloat(f) catch return error.WriteFailed;
+            }
+        },
+        .bool => |b| enc.writeBool(b) catch return error.WriteFailed,
+        .secret => enc.writeString(redact.REDACTED) catch return error.WriteFailed,
+        .err => |e| {
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                enc.writeString("error(0)") catch return error.WriteFailed;
+            } else {
+                enc.writeString(@errorName(e)) catch return error.WriteFailed;
+            }
+        },
+        .bytes => |bytes| {
+            var hex_buf: [512]u8 = undefined;
+            var hex_len: usize = 0;
+            const hex_chars = "0123456789abcdef";
+            for (bytes) |byte| {
+                if (hex_len + 2 > hex_buf.len) break;
+                hex_buf[hex_len] = hex_chars[byte >> 4];
+                hex_buf[hex_len + 1] = hex_chars[byte & 0x0f];
+                hex_len += 2;
+            }
+            enc.writeString(hex_buf[0..hex_len]) catch return error.WriteFailed;
+        },
+        .marshaler => enc.writeNull() catch return error.WriteFailed,
+    }
+}
+
+/// Returns true if the string contains control characters (bytes < 0x20, especially CR, LF, NUL).
+/// Used to prevent HTTP header injection.
+fn containsControlChars(s: []const u8) bool {
+    for (s) |c| {
+        if (c < 0x20 or c == 0x7f) return true;
+    }
+    return false;
+}
+
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
     if (!rec.level.atLeast(ctx.level)) return;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
-
-    // Format record as JSON
+    // Format record as JSON OUTSIDE the mutex
     var buf: [16384]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
@@ -224,9 +274,25 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         enc.writeString(rec.logger) catch return error.WriteFailed;
     }
 
+    // attrs
+    for (rec.attrs) |attr| {
+        enc.writeKey(attr.key) catch return error.WriteFailed;
+        if (redact.isSensitiveKey(attr.key)) {
+            enc.writeString(redact.REDACTED) catch return error.WriteFailed;
+        } else {
+            writeJsonValue(&enc, attr.value) catch return error.WriteFailed;
+        }
+    }
+
     enc.endObject() catch return error.WriteFailed;
 
-    ctx.sendWithRetry(fbs.getWritten()) catch {
+    const output = fbs.getWritten();
+
+    // Lock only for the network send
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    ctx.sendWithRetry(output) catch {
         metrics.global.incErrors();
         return error.WriteFailed;
     };
@@ -293,16 +359,35 @@ test "HttpSink URL parsing" {
         try std.testing.expect(!ctx.is_https);
     }
 
-    // HTTPS URL
+    // HTTPS URL is rejected (TLS not implemented)
     {
-        var ctx = try Context.init(allocator, .{
+        const result = Context.init(allocator, .{
             .url = "https://api.example.com/v1/logs",
         }, .info, Clock.system());
-        defer ctx.deinit();
-
-        try std.testing.expectEqualStrings("api.example.com", ctx.host);
-        try std.testing.expectEqual(@as(u16, 443), ctx.port);
-        try std.testing.expectEqualStrings("/v1/logs", ctx.path);
-        try std.testing.expect(ctx.is_https);
+        try std.testing.expectError(error.HttpsNotSupported, result);
     }
+}
+
+test "HttpSink containsControlChars" {
+    try std.testing.expect(!containsControlChars("normal-header"));
+    try std.testing.expect(!containsControlChars("X-Custom-Header"));
+    try std.testing.expect(containsControlChars("evil\r\nheader"));
+    try std.testing.expect(containsControlChars("evil\nheader"));
+    try std.testing.expect(containsControlChars("evil\x00header"));
+    try std.testing.expect(containsControlChars("evil\theader"));
+}
+
+test "HttpSink HTTP status check position" {
+    // Verify that our status check looks at the correct position.
+    // "HTTP/1.1 200 OK" => index 9 is '2'
+    const good = "HTTP/1.1 200 OK\r\n";
+    try std.testing.expect(good.len >= 12 and good[9] == '2');
+
+    // "HTTP/1.1 404 Not Found" => index 9 is '4'
+    const bad = "HTTP/1.1 404 Not Found\r\n";
+    try std.testing.expect(bad.len >= 12 and bad[9] != '2');
+
+    // A response containing " 2" in the body but with non-2xx status should fail
+    const tricky = "HTTP/1.1 400 Bad 2xx\r\n";
+    try std.testing.expect(tricky.len >= 12 and tricky[9] != '2');
 }

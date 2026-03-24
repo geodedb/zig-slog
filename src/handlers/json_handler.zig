@@ -49,13 +49,6 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     if (!rec.level.atLeast(ctx.level)) return;
 
-    // Validate numbers
-    for (rec.attrs) |attr| {
-        if (!attr.value.isValidJson()) {
-            return error.InvalidRecord;
-        }
-    }
-
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
 
@@ -147,7 +140,13 @@ fn writeJsonAttr(enc: anytype, attr: Attr, prefix: []const u8) !void {
     key_len += sanitized_key.len;
 
     enc.writeKey(key_buf[0..key_len]) catch return error.WriteFailed;
-    try writeJsonValue(enc, attr.value);
+
+    // Auto-redact sensitive keys
+    if (redact.isSensitiveKey(attr.key)) {
+        enc.writeString(redact.REDACTED) catch return error.WriteFailed;
+    } else {
+        try writeJsonValue(enc, attr.value);
+    }
 }
 
 fn writeJsonValue(enc: anytype, value: Value) !void {
@@ -155,7 +154,13 @@ fn writeJsonValue(enc: anytype, value: Value) !void {
         .str => |s| enc.writeString(s) catch return error.WriteFailed,
         .i64 => |i| enc.writeInt(i) catch return error.WriteFailed,
         .u64 => |u| enc.writeInt(u) catch return error.WriteFailed,
-        .f64 => |f| enc.writeFloat(f) catch return error.WriteFailed,
+        .f64 => |f| {
+            if (std.math.isNan(f) or std.math.isInf(f)) {
+                enc.writeNull() catch return error.WriteFailed;
+            } else {
+                enc.writeFloat(f) catch return error.WriteFailed;
+            }
+        },
         .bool => |b| enc.writeBool(b) catch return error.WriteFailed,
         .bytes => |b| {
             // Encode bytes as hex string
@@ -170,7 +175,14 @@ fn writeJsonValue(enc: anytype, value: Value) !void {
             }
             enc.writeString(hex_buf[0..hex_len]) catch return error.WriteFailed;
         },
-        .err => |e| enc.writeString(@errorName(e)) catch return error.WriteFailed,
+        .err => |e| {
+            const raw: u16 = @intFromError(e);
+            if (raw == 0) {
+                enc.writeString("error(0)") catch return error.WriteFailed;
+            } else {
+                enc.writeString(@errorName(e)) catch return error.WriteFailed;
+            }
+        },
         .secret => enc.writeString(redact.REDACTED) catch return error.WriteFailed,
         .marshaler => enc.writeNull() catch return error.WriteFailed,
     }
@@ -305,4 +317,65 @@ test "JSONHandler secret redaction" {
 
     try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "secret123") == null);
+}
+
+test "JSONHandler auto-redacts sensitive keys" {
+    var buf: [2048]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("password", "hunter2"),
+            Attr.string("user", "alice"),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    // password should be redacted
+    try std.testing.expect(std.mem.indexOf(u8, output, "hunter2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
+    // user should pass through
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"user\":\"alice\"") != null);
+}
+
+test "JSONHandler NaN/Inf written as null" {
+    var buf: [2048]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.float("nan_val", std.math.nan(f64)),
+            Attr.float("inf_val", std.math.inf(f64)),
+        },
+    };
+
+    // Should succeed (previously would return InvalidRecord)
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    // NaN and Inf should be written as null
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"nan_val\":null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"inf_val\":null") != null);
 }

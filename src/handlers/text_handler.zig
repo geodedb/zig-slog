@@ -69,8 +69,8 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         writer.writeByte(' ') catch return error.WriteFailed;
     }
 
-    // Message
-    writer.writeAll(rec.message) catch return error.WriteFailed;
+    // Message (sanitize to prevent log injection)
+    sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 
     // Context attributes
     for (ctx.context_attrs) |attr| {
@@ -104,8 +104,12 @@ fn writeAttr(writer: anytype, attr: Attr, prefix: []const u8) !void {
     try writer.writeAll(key);
     try writer.writeByte('=');
 
-    // Write value
-    try writeValue(writer, attr.value);
+    // Auto-redact sensitive keys
+    if (redact.isSensitiveKey(attr.key)) {
+        try writer.writeAll(redact.REDACTED);
+    } else {
+        try writeValue(writer, attr.value);
+    }
 }
 
 fn writeValue(writer: anytype, value: Value) !void {
@@ -115,7 +119,7 @@ fn writeValue(writer: anytype, value: Value) !void {
             const needs_quote = std.mem.indexOfScalar(u8, s, ' ') != null or
                 std.mem.indexOfScalar(u8, s, '=') != null;
             if (needs_quote) try writer.writeByte('"');
-            try writer.writeAll(s);
+            try sanitize.sanitizeOutput(writer, s);
             if (needs_quote) try writer.writeByte('"');
         },
         .i64 => |i| try writer.print("{d}", .{i}),
@@ -130,8 +134,9 @@ fn writeValue(writer: anytype, value: Value) !void {
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .bytes => |b| {
             try writer.writeAll("0x");
+            const hex_chars = "0123456789abcdef";
             for (b) |byte| {
-                try writer.print("{x:0>2}", .{byte});
+                try writer.writeAll(&[2]u8{ hex_chars[byte >> 4], hex_chars[byte & 0x0f] });
             }
         },
         .err => |e| {
@@ -279,4 +284,94 @@ test "TextHandler error attribute" {
 
     try std.testing.expect(std.mem.indexOf(u8, output, "err=OutOfMemory") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ctx=test") != null);
+}
+
+test "TextHandler auto-redacts sensitive keys" {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("api_key", "sk-12345"),
+            Attr.string("user", "alice"),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    // api_key should be redacted
+    try std.testing.expect(std.mem.indexOf(u8, output, "api_key=" ++ redact.REDACTED) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "sk-12345") == null);
+    // non-sensitive key should pass through
+    try std.testing.expect(std.mem.indexOf(u8, output, "user=alice") != null);
+}
+
+test "TextHandler sanitizes message newlines" {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "line1\nline2\rline3",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    // Newlines should be escaped
+    try std.testing.expect(std.mem.indexOf(u8, output, "line1\\nline2\\rline3") != null);
+    // Should not contain raw newline in the message part (note: ends with \n for line termination)
+    // Count newlines - should be exactly 1 (the final line terminator)
+    var newlines: usize = 0;
+    for (output) |c| {
+        if (c == '\n') newlines += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), newlines);
+}
+
+test "TextHandler sanitizes string value control chars" {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    const handler = init(&ctx);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("data", "value\twith\ttabs"),
+        },
+    };
+
+    try handler.handle(&rec);
+    const output = fbs.getWritten();
+
+    // Tabs should be escaped
+    try std.testing.expect(std.mem.indexOf(u8, output, "value\\twith\\ttabs") != null);
 }
