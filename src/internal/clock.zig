@@ -28,28 +28,19 @@ pub const Clock = struct {
 };
 
 /// A fixed clock that always returns the same timestamp.
+///
+/// Because Zig function pointers cannot capture state, the fixed timestamp
+/// is stored in a thread-local variable. Calling `init` or `setFixedTimestamp`
+/// sets that thread-local. The returned `Clock` reads it back via the
+/// function pointer, so each thread can have its own fixed time.
 pub const FixedClock = struct {
-    timestamp_us: i128,
     clock: Clock,
 
     pub fn init(timestamp_us: i128) FixedClock {
-        var fc = FixedClock{
-            .timestamp_us = timestamp_us,
-            .clock = undefined,
+        setFixedTimestamp(timestamp_us);
+        return .{
+            .clock = .{ .nowUtcMicros = getFixedTimestamp },
         };
-        fc.clock = .{ .nowUtcMicros = fixedNowFn(&fc) };
-        return fc;
-    }
-
-    fn fixedNowFn(self: *FixedClock) *const fn () i128 {
-        _ = self;
-        return struct {
-            fn now() i128 {
-                // Note: In real code, we'd need to capture the timestamp
-                // For testing, we use a global or thread-local approach
-                return getFixedTimestamp();
-            }
-        }.now;
     }
 
     pub fn asClock(self: *const FixedClock) Clock {
@@ -108,7 +99,7 @@ pub fn parseIso8601ToMicros(s: []const u8) ?i128 {
     return epoch_secs * 1_000_000 + micros;
 }
 
-fn epochDays(year: i32, month: u8, day: u8) i64 {
+pub fn epochDays(year: i32, month: u8, day: u8) i64 {
     // Days from Unix epoch (1970-01-01)
     var y: i64 = @intCast(year);
     var m: i64 = @intCast(month);
@@ -138,4 +129,23 @@ test "Clock.system" {
     const clock = Clock.system();
     const now = clock.now();
     try std.testing.expect(now > 0);
+}
+
+test "FixedClock.init sets thread-local and returns correct timestamp" {
+    const expected: i128 = 1735787045000000;
+    const fc = FixedClock.init(expected);
+    const clock = fc.asClock();
+
+    try std.testing.expectEqual(expected, clock.now());
+
+    // Verify init with a different value updates the thread-local.
+    const expected2: i128 = 9999999;
+    _ = FixedClock.init(expected2);
+    try std.testing.expectEqual(expected2, clock.now());
+}
+
+test "Clock.fixed returns FixedClock with correct timestamp" {
+    const expected: i128 = 42000000;
+    const fc = Clock.fixed(expected);
+    try std.testing.expectEqual(expected, fc.clock.now());
 }

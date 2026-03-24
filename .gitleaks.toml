@@ -7,6 +7,5 @@ useDefault = true
 
 [allowlist]
 paths = [
-    '''examples/.*''',
-    '''tests/.*''',
+    '''examples/secret_redaction\.zig''',
 ]

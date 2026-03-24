@@ -87,38 +87,6 @@ pub const Handler = struct {
     }
 };
 
-/// Base context for handlers that tracks level and attributes.
-pub const BaseHandlerContext = struct {
-    level: Level,
-    prefix: []const u8,
-    context_attrs: []const Attr,
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator, level: Level) BaseHandlerContext {
-        return .{
-            .level = level,
-            .prefix = "",
-            .context_attrs = &.{},
-            .allocator = allocator,
-        };
-    }
-
-    pub fn enabled(self: *const BaseHandlerContext, level: Level) bool {
-        return level.atLeast(self.level);
-    }
-
-    /// Builds the full attribute key with prefix.
-    pub fn prefixedKey(self: *const BaseHandlerContext, key: []const u8, buf: []u8) []const u8 {
-        if (self.prefix.len == 0) return key;
-        if (self.prefix.len + 1 + key.len > buf.len) return key;
-
-        @memcpy(buf[0..self.prefix.len], self.prefix);
-        buf[self.prefix.len] = '.';
-        @memcpy(buf[self.prefix.len + 1 ..][0..key.len], key);
-        return buf[0 .. self.prefix.len + 1 + key.len];
-    }
-};
-
 test "Handler vtable" {
     // Basic structure test
     const vtable = HandlerVTable{

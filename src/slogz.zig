@@ -47,7 +47,6 @@ pub const Handler = @import("handler.zig").Handler;
 pub const HandlerVTable = @import("handler.zig").HandlerVTable;
 pub const HandlerError = @import("handler.zig").HandlerError;
 pub const Logger = @import("logger.zig").Logger;
-pub const LoggerOptions = @import("logger.zig").LoggerOptions;
 
 // Internal utilities
 pub const Clock = @import("internal/clock.zig").Clock;
@@ -104,29 +103,31 @@ pub const UdpOptions = udp_sink.UdpOptions;
 pub const HttpOptions = http_sink.HttpOptions;
 
 /// Create a text handler writing to stderr.
-pub fn stderrHandler(level: Level) struct { ctx: text.Context, handler: Handler } {
-    var ctx = text.Context.init(
+///
+/// The caller provides a pointer to a `text.Context` which is initialized
+/// in place, avoiding dangling pointers. The returned `Handler` references
+/// the caller-owned context, so `ctx` must outlive the handler.
+pub fn stderrHandler(ctx: *text.Context, level: Level) Handler {
+    ctx.* = text.Context.init(
         std.fs.File.stderr().deprecatedWriter().any(),
         level,
         Clock.system(),
     );
-    return .{
-        .ctx = ctx,
-        .handler = text.init(&ctx),
-    };
+    return text.init(ctx);
 }
 
 /// Create a JSON handler writing to stderr.
-pub fn stderrJsonHandler(level: Level) struct { ctx: json.Context, handler: Handler } {
-    var ctx = json.Context.init(
+///
+/// The caller provides a pointer to a `json.Context` which is initialized
+/// in place, avoiding dangling pointers. The returned `Handler` references
+/// the caller-owned context, so `ctx` must outlive the handler.
+pub fn stderrJsonHandler(ctx: *json.Context, level: Level) Handler {
+    ctx.* = json.Context.init(
         std.fs.File.stderr().deprecatedWriter().any(),
         level,
         Clock.system(),
     );
-    return .{
-        .ctx = ctx,
-        .handler = json.init(&ctx),
-    };
+    return json.init(ctx);
 }
 
 /// Create a discard handler (for benchmarking or disabling logging).
@@ -258,6 +259,45 @@ test "slogz level filtering" {
     const output = fbs.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "Debug message") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning message") != null);
+}
+
+test "stderrHandler caller-owned context avoids dangling pointer" {
+    // The new API takes a *text.Context out-parameter, so the handler's
+    // internal ctx pointer points to caller-owned memory, not a dead stack frame.
+    var ctx: text.Context = undefined;
+    const handler = stderrHandler(&ctx, .fatal);
+
+    // Log at a level below .fatal so it is filtered out (no stderr noise in tests),
+    // but the handler.handle call exercises the vtable pointer indirection through
+    // the caller-owned context, proving no dangling pointer.
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "filtered",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+    try handler.handle(&rec);
+}
+
+test "stderrJsonHandler caller-owned context avoids dangling pointer" {
+    var ctx: json.Context = undefined;
+    const handler = stderrJsonHandler(&ctx, .fatal);
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "filtered",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+    try handler.handle(&rec);
 }
 
 test "slogz discard handler" {

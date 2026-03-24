@@ -6,6 +6,7 @@
 //! Produces timestamps in the format: 2025-01-02T03:04:05.000000Z
 
 const std = @import("std");
+const clock = @import("../internal/clock.zig");
 
 /// Format a timestamp in microseconds since epoch to RFC3339 format.
 /// Output format: YYYY-MM-DDTHH:MM:SS.ffffffZ (27 bytes)
@@ -130,28 +131,10 @@ pub fn parseTimestamp(s: []const u8) ?i128 {
         }
     }
 
-    const epoch_days = ymdToEpochDay(year, month, day);
+    const epoch_days = clock.epochDays(year, month, day);
     const epoch_secs: i128 = epoch_days * 86400 + @as(i128, hour) * 3600 + @as(i128, minute) * 60 + @as(i128, second);
 
     return epoch_secs * 1_000_000 + micros;
-}
-
-fn ymdToEpochDay(year: i32, month: u8, day: u8) i64 {
-    var y: i64 = @intCast(year);
-    var m: i64 = @intCast(month);
-    const d: i64 = @intCast(day);
-
-    if (m <= 2) {
-        y -= 1;
-        m += 12;
-    }
-
-    const era: i64 = @divFloor(if (y >= 0) y else y - 399, 400);
-    const yoe: i64 = y - era * 400;
-    const doy: i64 = @divFloor(153 * (m - 3) + 2, 5) + d - 1;
-    const doe: i64 = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
-
-    return era * 146097 + doe - 719468;
 }
 
 test "formatTimestamp" {

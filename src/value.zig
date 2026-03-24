@@ -9,6 +9,10 @@
 const std = @import("std");
 
 /// A secret value that will be redacted in log output.
+///
+/// Note: The secret value is stored in plaintext in process memory.
+/// It is only redacted during serialization. Consider memory scrubbing
+/// in security-sensitive deployments.
 pub const Secret = struct {
     value: []const u8,
 

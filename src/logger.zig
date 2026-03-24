@@ -23,7 +23,22 @@ fn defaultFatalHook(_: *const Record) void {
 }
 
 /// Fatal hook called after logging a fatal message.
-pub var fatal_hook: *const fn (*const Record) void = defaultFatalHook;
+/// Access this field only via `getFatalHook` and `setFatalHook` to ensure
+/// atomic ordering and avoid data races when the hook is changed
+/// concurrently with logging.
+var fatal_hook: *const fn (*const Record) void = defaultFatalHook;
+
+const FatalHookFn = *const fn (*const Record) void;
+
+/// Atomically load the current fatal hook.
+pub fn getFatalHook() FatalHookFn {
+    return @atomicLoad(FatalHookFn, &fatal_hook, .acquire);
+}
+
+/// Atomically store a new fatal hook.
+pub fn setFatalHook(hook: FatalHookFn) void {
+    @atomicStore(FatalHookFn, &fatal_hook, hook, .release);
+}
 
 /// Logger provides the main logging interface.
 pub const Logger = struct {
@@ -146,7 +161,7 @@ pub const Logger = struct {
         metrics.global.incEmitted();
 
         if (level == .fatal) {
-            fatal_hook(&rec);
+            getFatalHook()(&rec);
         }
     }
 
@@ -183,7 +198,7 @@ pub const Logger = struct {
         metrics.global.incEmitted();
 
         if (level == .fatal) {
-            fatal_hook(&rec);
+            getFatalHook()(&rec);
         }
     }
 
@@ -238,4 +253,38 @@ test "Logger.named" {
     const child = logger.named("child");
 
     try std.testing.expectEqualStrings("child", child.name);
+}
+
+test "fatal_hook uses atomic access" {
+    // Verify we can atomically load and store the fatal hook.
+    const original = getFatalHook();
+
+    const test_hook = struct {
+        fn hook(_: *const Record) void {
+            // no-op test hook (avoids panic)
+        }
+    }.hook;
+
+    setFatalHook(test_hook);
+    const loaded = getFatalHook();
+    try std.testing.expect(loaded == test_hook);
+
+    // Exercise the hook through Logger.fatal by swapping in a hook that
+    // sets a flag instead of panicking.
+    const flag_hook = struct {
+        var called: bool = false;
+        fn hook(_: *const Record) void {
+            called = true;
+        }
+    };
+    setFatalHook(flag_hook.hook);
+
+    const discard_handler = @import("handlers/discard_handler.zig").init();
+    const logger = Logger.init(discard_handler, .fatal, Clock.system());
+    try logger.fatal("test.fatal", &.{});
+
+    try std.testing.expect(flag_hook.called);
+
+    // Restore original hook.
+    setFatalHook(original);
 }

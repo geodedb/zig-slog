@@ -23,68 +23,81 @@ pub fn reset() void {
     global = .{};
 }
 
+/// Cache line size used to pad atomic counters, preventing false sharing
+/// when multiple threads update adjacent counters concurrently.
+const cache_line = 64;
+
+/// A cache-line-aligned atomic counter that occupies exactly one cache line,
+/// preventing false sharing between adjacent counters in the Metrics struct.
+const PaddedCounter = struct {
+    value: AtomicCounter align(cache_line) = AtomicCounter.init(0),
+};
+
 /// Metrics counters for logging operations.
+///
+/// Each counter is padded to a separate cache line (64 bytes) so that
+/// concurrent increments on different counters do not cause false sharing.
 pub const Metrics = struct {
     /// Total number of log records emitted.
-    logs_emitted_total: AtomicCounter = AtomicCounter.init(0),
+    logs_emitted_total: PaddedCounter = .{},
     /// Total number of log records dropped (e.g., queue full).
-    logs_dropped_total: AtomicCounter = AtomicCounter.init(0),
+    logs_dropped_total: PaddedCounter = .{},
     /// Total number of handler errors.
-    handler_errors_total: AtomicCounter = AtomicCounter.init(0),
+    handler_errors_total: PaddedCounter = .{},
     /// Total bytes written.
-    bytes_written_total: AtomicCounter = AtomicCounter.init(0),
+    bytes_written_total: PaddedCounter = .{},
     /// Records currently in async queue.
-    queue_size: AtomicCounter = AtomicCounter.init(0),
+    queue_size: PaddedCounter = .{},
     /// Number of file rotations.
-    rotations_total: AtomicCounter = AtomicCounter.init(0),
+    rotations_total: PaddedCounter = .{},
     /// Number of network reconnections.
-    reconnections_total: AtomicCounter = AtomicCounter.init(0),
+    reconnections_total: PaddedCounter = .{},
 
     /// Increment logs emitted counter.
     pub fn incEmitted(self: *Metrics) void {
-        _ = self.logs_emitted_total.fetchAdd(1, .monotonic);
+        _ = self.logs_emitted_total.value.fetchAdd(1, .monotonic);
     }
 
     /// Increment logs dropped counter.
     pub fn incDropped(self: *Metrics, count: CounterType) void {
-        _ = self.logs_dropped_total.fetchAdd(count, .monotonic);
+        _ = self.logs_dropped_total.value.fetchAdd(count, .monotonic);
     }
 
     /// Increment handler errors counter.
     pub fn incErrors(self: *Metrics) void {
-        _ = self.handler_errors_total.fetchAdd(1, .monotonic);
+        _ = self.handler_errors_total.value.fetchAdd(1, .monotonic);
     }
 
     /// Add bytes written.
     pub fn addBytesWritten(self: *Metrics, bytes: CounterType) void {
-        _ = self.bytes_written_total.fetchAdd(bytes, .monotonic);
+        _ = self.bytes_written_total.value.fetchAdd(bytes, .monotonic);
     }
 
     /// Set queue size.
     pub fn setQueueSize(self: *Metrics, size: CounterType) void {
-        self.queue_size.store(size, .monotonic);
+        self.queue_size.value.store(size, .monotonic);
     }
 
     /// Increment rotations counter.
     pub fn incRotations(self: *Metrics) void {
-        _ = self.rotations_total.fetchAdd(1, .monotonic);
+        _ = self.rotations_total.value.fetchAdd(1, .monotonic);
     }
 
     /// Increment reconnections counter.
     pub fn incReconnections(self: *Metrics) void {
-        _ = self.reconnections_total.fetchAdd(1, .monotonic);
+        _ = self.reconnections_total.value.fetchAdd(1, .monotonic);
     }
 
     /// Get current values.
     pub fn snapshot(self: *const Metrics) MetricsSnapshot {
         return .{
-            .logs_emitted_total = self.logs_emitted_total.load(.monotonic),
-            .logs_dropped_total = self.logs_dropped_total.load(.monotonic),
-            .handler_errors_total = self.handler_errors_total.load(.monotonic),
-            .bytes_written_total = self.bytes_written_total.load(.monotonic),
-            .queue_size = self.queue_size.load(.monotonic),
-            .rotations_total = self.rotations_total.load(.monotonic),
-            .reconnections_total = self.reconnections_total.load(.monotonic),
+            .logs_emitted_total = self.logs_emitted_total.value.load(.monotonic),
+            .logs_dropped_total = self.logs_dropped_total.value.load(.monotonic),
+            .handler_errors_total = self.handler_errors_total.value.load(.monotonic),
+            .bytes_written_total = self.bytes_written_total.value.load(.monotonic),
+            .queue_size = self.queue_size.value.load(.monotonic),
+            .rotations_total = self.rotations_total.value.load(.monotonic),
+            .reconnections_total = self.reconnections_total.value.load(.monotonic),
         };
     }
 
@@ -167,4 +180,23 @@ test "Metrics.renderPrometheus" {
 
     try std.testing.expect(std.mem.indexOf(u8, output, "slogz_logs_emitted_total 3") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "slogz_logs_dropped_total 0") != null);
+}
+
+test "Metrics counters are cache-line aligned to prevent false sharing" {
+    // Each PaddedCounter's value field should be aligned to 64 bytes.
+    var m = Metrics{};
+    const base = @intFromPtr(&m);
+
+    const emitted_addr = @intFromPtr(&m.logs_emitted_total.value);
+    const dropped_addr = @intFromPtr(&m.logs_dropped_total.value);
+    const errors_addr = @intFromPtr(&m.handler_errors_total.value);
+
+    // Each counter must start on a cache-line boundary relative to struct start.
+    try std.testing.expect((emitted_addr - base) % cache_line == 0);
+    try std.testing.expect((dropped_addr - base) % cache_line == 0);
+    try std.testing.expect((errors_addr - base) % cache_line == 0);
+
+    // Adjacent counters must be at least cache_line bytes apart.
+    try std.testing.expect(dropped_addr - emitted_addr >= cache_line);
+    try std.testing.expect(errors_addr - dropped_addr >= cache_line);
 }
