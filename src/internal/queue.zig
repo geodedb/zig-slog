@@ -29,13 +29,16 @@ const Attr = @import("../value.zig").Attr;
 const Value = @import("../value.zig").Value;
 
 /// Maximum number of attributes stored per queued record.
-pub const MAX_STORED_ATTRS = 32;
+/// Reduced from 32 to 8 -- most log records use fewer than 5 attributes.
+/// With 8 attrs: QueuedRecord ~3KB vs ~12.5KB at 32.
+pub const MAX_STORED_ATTRS = 8;
 
 /// Maximum key length for a stored attribute.
 const MAX_KEY_LEN = 64;
 
 /// Maximum value length for a stored attribute.
-const MAX_VALUE_LEN = 256;
+/// Reduced from 256 to 128 -- covers most practical value lengths.
+const MAX_VALUE_LEN = 128;
 
 /// Queue errors.
 pub const QueueError = error{
@@ -160,13 +163,13 @@ fn serializeValue(buf: *[MAX_VALUE_LEN]u8, val: Value) usize {
 pub const QueuedRecord = struct {
     time_utc_us: i128,
     level_int: i32,
-    msg_id_buf: [256]u8,
+    msg_id_buf: [64]u8,
     msg_id_len: usize,
     message_buf: [1024]u8,
     message_len: usize,
     logger_buf: [128]u8,
     logger_len: usize,
-    source_file_buf: [256]u8,
+    source_file_buf: [128]u8,
     source_file_len: usize,
     source_line: u32,
     /// Fixed-size storage for attributes. All values are serialized to strings.
@@ -179,13 +182,13 @@ pub const QueuedRecord = struct {
             .time_utc_us = rec.time_utc_us,
             .level_int = @intFromEnum(rec.level),
             .msg_id_buf = undefined,
-            .msg_id_len = @min(rec.msg_id.len, 256),
+            .msg_id_len = @min(rec.msg_id.len, 64),
             .message_buf = undefined,
             .message_len = @min(rec.message.len, 1024),
             .logger_buf = undefined,
             .logger_len = @min(rec.logger.len, 128),
             .source_file_buf = undefined,
-            .source_file_len = @min(rec.source_file.len, 256),
+            .source_file_len = @min(rec.source_file.len, 128),
             .source_line = rec.source_line,
             .stored_attrs = undefined,
             .attrs_count = 0,

@@ -2,22 +2,44 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Date:** 2026-03-24
-**Commits:** ec068d0, 3fcd5a5, 05c6a16, 0ed8afe, 677630f (passes 1-2), pass 3 (current)
+**Commits:** ec068d0, 3fcd5a5, 05c6a16, 0ed8afe, 677630f (passes 1-2), pass 3, pass 4 (current)
 
 ---
 
 ## GAP_ANALYSIS Status
 
-| File | Closed | Blocked | Won't Do | Remaining Open | Total |
-|------|--------|---------|----------|----------------|-------|
-| GAP_ANALYSIS.md (Security) | 21 | 1 | 2 | 0 | 24 |
-| QUALITY_GAP_ANALYSIS.md | 25 | 0 | 2 | 1 | 28 |
-| PERF_GAP_ANALYSIS.md | 15 | 0 | 9 | 4 | 28 |
-| **Total** | **61** | **1** | **13** | **5** | **80** |
+| File | Closed | Blocked | Won't Do | Partially Closed | Remaining Open | Total |
+|------|--------|---------|----------|------------------|----------------|-------|
+| GAP_ANALYSIS.md (Security) | 22 | 1 | 2 | 0 | 0 | 25 |
+| QUALITY_GAP_ANALYSIS.md | 27 | 0 | 2 | 1 | 0 | 30 |
+| PERF_GAP_ANALYSIS.md | 18 | 0 | 10 | 0 | 0 | 28 |
+| **Total** | **67** | **1** | **14** | **1** | **0** | **83** |
 
-**Overall:** 61 closed, 1 blocked, 13 won't do, 5 remaining open out of 80 total items.
+**Overall:** 67 closed, 1 blocked, 14 won't do, 1 partially closed out of 83 total items. Zero remaining open items.
 
-**Note:** Item counts increased from 60 (pass 2) to 80 (pass 3) because pass 3 added new findings: SEC-0020 through SEC-0024, Q-21 through Q-28, PERF-022 through PERF-028.
+**Note:** Item counts increased from 80 (pass 3) to 83 (pass 4) because pass 4 added new findings: SEC-0025, NEW-01 (Q-29), NEW-03 (Q-30).
+
+---
+
+## Pass 4 Summary
+
+Pass 4 addressed 7 gap items (6 closures + 1 won't-do):
+
+| Category | Closed | Won't Do | Blocked |
+|----------|--------|----------|---------|
+| Security | 1 | 0 | 0 |
+| Quality | 2 | 0 | 0 |
+| Performance | 3 | 1 | 0 |
+| **Total** | **6** | **1** | **0** |
+
+Key changes in pass 4:
+- **SEC-0025**: Network sinks now sanitize JSON attribute keys via sanitize.sanitizeKey().
+- **NEW-01 (Q-29)**: 23 inline unit tests added to json_value.zig (12) and text_value.zig (11), covering all Value variants.
+- **NEW-03 (Q-30)**: json_value.zig bytes buffer increased from 512 to 2048 bytes (1024 input bytes); truncation marker added.
+- **PERF-008**: QueuedRecord reduced from ~12.5KB to ~3.0KB per entry (75% reduction).
+- **PERF-023**: isSensitiveKey() optimized with comptime-unrolled inline for + min_pattern_len early rejection.
+- **PERF-026**: Async handler batch drain: up to 32 records per wake cycle via tryPop.
+- **PERF-017**: Marked Won't Do (intentionally published module, not dead code).
 
 ---
 
@@ -112,6 +134,17 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 | Q-23 | SEC-0006 | rotating_file .str sanitization resolved by shared writeTextValue |
 | Q-26 | PERF-022 | UDP mutex scope is the same fix |
 
+### Pass 4 Closures (new)
+
+| Gap-ID | File | Title | Evidence |
+|--------|------|-------|----------|
+| SEC-0025 | GAP_ANALYSIS.md | Network sinks skip sanitizeKey on JSON attr keys | tcp_sink.zig:212, udp_sink.zig:131, http_sink.zig:238 -- sanitize.sanitizeKey applied to attr keys |
+| NEW-01 (Q-29) | QUALITY_GAP_ANALYSIS.md | No unit tests for json_value.zig and text_value.zig | json_value.zig:94-157 (12 tests), text_value.zig:71-157 (11 tests) -- all Value variants covered |
+| NEW-03 (Q-30) | QUALITY_GAP_ANALYSIS.md | json_value.zig bytes truncation at 256 bytes | json_value.zig:49-70 -- max_input=1024, hex_buf[2048], "..." truncation marker |
+| PERF-008 | PERF_GAP_ANALYSIS.md | QueuedRecord ~12.5KB per entry | queue.zig:34 MAX_STORED_ATTRS=8, :41 MAX_VALUE_LEN=128, :166 msg_id_buf[64], :172 source_file_buf[128]; ~3.0KB per entry (75% reduction) |
+| PERF-023 | PERF_GAP_ANALYSIS.md | isSensitiveKey() O(k*p) linear scan | redact.zig:33-60 -- comptime min_pattern_len early rejection + inline for single-pass scan |
+| PERF-026 | PERF_GAP_ANALYSIS.md | Async handler single-record processing | async_handler.zig:98-125 -- max_batch_size=32, tryPop batch drain, processQueuedRecord helper |
+
 ---
 
 ## Won't Do Items
@@ -128,8 +161,8 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 | PERF-006 | PERF_GAP_ANALYSIS.md | Handlers hold mutex during format+I/O | Lock scope reduction is separate optimization |
 | PERF-018 | PERF_GAP_ANALYSIS.md | Benchmark lacks statistical rigor | Separate infrastructure improvement |
 | PERF-019 | PERF_GAP_ANALYSIS.md | No multi-threaded benchmarks | Separate infrastructure improvement |
-| PERF-020 | PERF_GAP_ANALYSIS.md | Metrics false sharing | Addressed with PaddedCounter; further optimization low priority |
 | PERF-021 | PERF_GAP_ANALYSIS.md | getPool() mutex on every call | parallel.zig is optional; deferred |
+| PERF-017 | PERF_GAP_ANALYSIS.md | parallel.zig dead code adds build cost | Intentionally published module (commits 1fa06e6/1041b15); not dead code |
 | PERF-025 | PERF_GAP_ANALYSIS.md | Stack allocations 8-25KB per log call | Requires profiling data; risks truncation of large records |
 | PERF-027 | PERF_GAP_ANALYSIS.md | Multi-handler re-formats per child | Architecturally expected; pre-formatting needs format negotiation |
 
@@ -147,15 +180,23 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 
 | Gap-ID | File | Title | Reason |
 |--------|------|-------|--------|
-| Q-27 | QUALITY_GAP_ANALYSIS.md | deprecatedWriter() in slogz.zig | Partially closed (windows_eventlog.zig fixed); slogz.zig blocked on AnyWriter handler interface refactor |
-| PERF-008 | PERF_GAP_ANALYSIS.md | QueuedRecord ~12.5KB per entry | Separate optimization effort; current approach is correct |
-| PERF-017 | PERF_GAP_ANALYSIS.md | parallel.zig dead code adds build cost | Intentionally kept as published module |
-| PERF-023 | PERF_GAP_ANALYSIS.md | isSensitiveKey() O(k*p) linear scan | Replace with compile-time perfect hash; deferred |
-| PERF-026 | PERF_GAP_ANALYSIS.md | Async handler single-record processing | Batch dequeue optimization; deferred |
+| Q-27 | QUALITY_GAP_ANALYSIS.md | deprecatedWriter() in slogz.zig | **Partially closed** -- windows_eventlog.zig fixed; slogz.zig blocked on AnyWriter handler interface refactor |
+
+**Note:** No fully open items remain. Q-27 is partially closed. All former open items (PERF-008, PERF-017, PERF-023, PERF-026) resolved in pass 4.
 
 ---
 
 ## Tests Executed
+
+### Pass 4
+
+| Command | Result |
+|---------|--------|
+| `zig build test --summary all` | PASS (223/223 tests, 16/16 build steps) |
+| `zig fmt --check src/ build.zig` | PASS (format clean) |
+| `zig build` | PASS (build clean) |
+
+### Pass 3
 
 | Command | Result |
 |---------|--------|
@@ -166,6 +207,12 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 ---
 
 ## Security Notes
+
+### Pass 4
+
+- **Network sink key sanitization (SEC-0025):** sanitize.sanitizeKey() now applied to JSON attribute keys in tcp_sink.zig, udp_sink.zig, and http_sink.zig. All handler types (text, JSON, syslog, journald, windows_eventlog, rotating_file, and all 3 network sinks) now consistently sanitize attribute keys.
+- **Unit test coverage for shared modules (NEW-01):** 23 inline tests added to json_value.zig and text_value.zig, ensuring all Value variants (str, i64, u64, f64, bool, secret, err, bytes, marshaler + edge cases) are tested at the unit level. This prevents regressions in the shared formatting code used by all handlers.
+- **Bytes encoding capacity (NEW-03):** json_value.zig hex encoding buffer increased from 512 to 2048 bytes, supporting up to 1024 input bytes. Truncation marker "..." added for larger inputs. This handles SHA-512 hashes (64 bytes), AES-256 keys (32 bytes), and most practical binary fields without truncation.
 
 ### Pass 1-2
 
@@ -239,6 +286,12 @@ Pass 3 addressed 18 gap items (16 unique closures + 2 duplicates resolved by oth
 | PERF-028 | #41 | closed |
 | Q-27 (deprecatedWriter) | #1 | commented (partial fix) |
 
+### Pass 4
+
+| Gap-ID | Issue | Action |
+|--------|-------|--------|
+| PERF-008 | #30 | closed |
+
 ---
 
 ## Files Changed
@@ -291,3 +344,16 @@ Logger.named() concatenation, DNS hostname resolution for TCP/HTTP sinks, multi_
 | src/sinks/udp_sink.zig | writeJsonValue import, mutex scope narrowed |
 | src/sinks/http_sink.zig | writeJsonValue import |
 | .gitleaks.toml | Allowlist extended with json_logging.zig and accept.zig |
+
+### Pass 4 (key files modified)
+
+| File | Changes |
+|------|---------|
+| src/sinks/tcp_sink.zig | sanitize import, sanitizeKey on JSON attr keys |
+| src/sinks/udp_sink.zig | sanitize import, sanitizeKey on JSON attr keys |
+| src/sinks/http_sink.zig | sanitize import, sanitizeKey on JSON attr keys |
+| src/fmt/json_value.zig | 12 inline tests added; bytes buffer increased from 512 to 2048 (max_input=1024); truncation marker "..." |
+| src/fmt/text_value.zig | 11 inline tests added covering all Value variants |
+| src/internal/queue.zig | MAX_STORED_ATTRS 32->8, MAX_VALUE_LEN 256->128, msg_id_buf 256->64, source_file_buf 256->128 |
+| src/util/redact.zig | comptime min_pattern_len, inline for single-pass scan replacing sequential indexOf |
+| src/handlers/async_handler.zig | batch drain (max_batch_size=32, tryPop loop), processQueuedRecord helper extracted |

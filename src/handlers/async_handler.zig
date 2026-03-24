@@ -95,56 +95,53 @@ pub const Context = struct {
         self.queue.deinit(self.allocator);
     }
 
+    /// Maximum records to drain per wake cycle (batch processing).
+    const max_batch_size: usize = 32;
+
     fn workerThread(ctx: *Context) void {
         while (ctx.running.load(.acquire)) {
-            // Try to get a record with timeout
+            // Wait for a record with timeout
             if (ctx.queue.popTimeout(100)) |qr| {
-                if (qr.valid) {
-                    // Build attrs from stored data
-                    var attr_buf: [MAX_STORED_ATTRS]Attr = undefined;
-                    const attrs = qr.attrs(&attr_buf);
+                processQueuedRecord(ctx, qr);
 
-                    // Reconstruct record and deliver
-                    const rec = Record{
-                        .time_utc_us = qr.time_utc_us,
-                        .level = @enumFromInt(qr.level_int),
-                        .msg_id = qr.msgId(),
-                        .message = qr.message(),
-                        .logger = qr.logger(),
-                        .source_file = qr.sourceFile(),
-                        .source_line = qr.source_line,
-                        .attrs = attrs,
-                    };
-
-                    ctx.inner.handle(&rec) catch {
-                        metrics.global.incErrors();
-                    };
+                // Batch drain: process additional queued records without
+                // re-waiting, up to max_batch_size per wake cycle.
+                var batch: usize = 1;
+                while (batch < max_batch_size) : (batch += 1) {
+                    if (ctx.queue.tryPop()) |batch_qr| {
+                        processQueuedRecord(ctx, batch_qr);
+                    } else break;
                 }
             }
         }
 
-        // Drain remaining records
+        // Drain remaining records at shutdown
         while (ctx.queue.tryPop()) |qr| {
-            if (qr.valid) {
-                var attr_buf: [MAX_STORED_ATTRS]Attr = undefined;
-                const attrs = qr.attrs(&attr_buf);
-
-                const rec = Record{
-                    .time_utc_us = qr.time_utc_us,
-                    .level = @enumFromInt(qr.level_int),
-                    .msg_id = qr.msgId(),
-                    .message = qr.message(),
-                    .logger = qr.logger(),
-                    .source_file = qr.sourceFile(),
-                    .source_line = qr.source_line,
-                    .attrs = attrs,
-                };
-
-                ctx.inner.handle(&rec) catch {
-                    metrics.global.incErrors();
-                };
-            }
+            processQueuedRecord(ctx, qr);
         }
+    }
+
+    /// Reconstruct a Record from QueuedRecord and deliver to inner handler.
+    fn processQueuedRecord(ctx: *Context, qr: QueuedRecord) void {
+        if (!qr.valid) return;
+
+        var attr_buf: [MAX_STORED_ATTRS]Attr = undefined;
+        const attrs = qr.attrs(&attr_buf);
+
+        const rec = Record{
+            .time_utc_us = qr.time_utc_us,
+            .level = @enumFromInt(qr.level_int),
+            .msg_id = qr.msgId(),
+            .message = qr.message(),
+            .logger = qr.logger(),
+            .source_file = qr.sourceFile(),
+            .source_line = qr.source_line,
+            .attrs = attrs,
+        };
+
+        ctx.inner.handle(&rec) catch {
+            metrics.global.incErrors();
+        };
     }
 
     /// Enqueue a record for async delivery.

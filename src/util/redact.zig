@@ -30,8 +30,21 @@ pub const sensitive_keys = [_][]const u8{
     "secretkey",
 };
 
+/// Minimum pattern length, computed at comptime for fast rejection.
+const min_pattern_len = blk: {
+    var min: usize = sensitive_keys[0].len;
+    for (sensitive_keys) |k| {
+        if (k.len < min) min = k.len;
+    }
+    break :blk min;
+};
+
 /// Returns true if the key should be automatically redacted.
+/// Uses a single-pass scan with comptime-unrolled pattern matching
+/// instead of 15 separate indexOf calls.
 pub fn isSensitiveKey(key: []const u8) bool {
+    if (key.len < min_pattern_len) return false;
+
     var lower_buf: [64]u8 = undefined;
     const lower_len = @min(key.len, lower_buf.len);
     for (key[0..lower_len], 0..) |c, i| {
@@ -39,9 +52,17 @@ pub fn isSensitiveKey(key: []const u8) bool {
     }
     const lower = lower_buf[0..lower_len];
 
-    for (sensitive_keys) |sensitive| {
-        if (std.mem.indexOf(u8, lower, sensitive) != null) {
-            return true;
+    // Single-pass scan: at each position, check all patterns via inline for.
+    // The compiler unrolls each pattern check at comptime, enabling optimized
+    // fixed-length comparisons.
+    for (0..lower.len) |pos| {
+        const remaining = lower.len - pos;
+        inline for (sensitive_keys) |pattern| {
+            if (remaining >= pattern.len and
+                std.mem.eql(u8, lower[pos..][0..pattern.len], pattern))
+            {
+                return true;
+            }
         }
     }
     return false;

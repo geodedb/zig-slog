@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Created:** 2026-03-23
-**Last updated:** 2026-03-24 (rev 2 -- pass 3 resolved items added)
+**Last updated:** 2026-03-24 (rev 3 -- pass 4 resolved items added)
 
 ---
 
@@ -320,13 +320,9 @@ Move entries here from GAP_ANALYSIS.md when resolution evidence is confirmed.
 - **Status:** Won't Do
 - **Reason:** Reducing lock scope from format+write to write-only requires thread-local or per-call buffers with careful lifetime management. Tracked as separate optimization.
 
-### PERF-008: QueuedRecord ~3.8KB per entry
-- **Status:** Open
-- **Reason:** Variable-length arena allocation would reduce memory but adds complexity. Current fixed-buffer approach is correct and simple. Tracked as separate optimization.
-
 ### PERF-017: parallel.zig dead code adds build-time cost
-- **Status:** Open
-- **Reason:** The parallel module was intentionally added as a published module (commits 1fa06e6, 1041b15). Build-time impact is minor. No action taken.
+- **Status:** Won't Do
+- **Reason:** The parallel module was intentionally added as a published library module (commits 1fa06e6 "Add spice-based parallel operations for slog" and 1041b15 "Add documentation for parallel operations module"). It is an exported API for consumers, not dead code. Build-time impact is minor.
 
 ### PERF-018: Benchmark suite lacks statistical rigor
 - **Status:** Won't Do
@@ -336,9 +332,11 @@ Move entries here from GAP_ANALYSIS.md when resolution evidence is confirmed.
 - **Status:** Won't Do
 - **Reason:** Multi-threaded benchmark infrastructure is a separate effort.
 
-### PERF-020: Metrics struct potential false sharing
-- **Status:** Won't Do
-- **Reason:** Minor optimization. Cache-line padding would increase struct from 56 to ~448 bytes. Deferred as low priority.
+### PERF-020: Metrics struct false sharing -- fixed via PaddedCounter
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24
+- **Resolution:** PaddedCounter with `align(cache_line)` applied to all 7 counters. Each counter occupies a full cache line, eliminating false sharing.
+- **Evidence:** `src/metrics/metrics.zig:28-34` -- PaddedCounter with align(cache_line); test at lines 185-201 verifies alignment.
 
 ### PERF-021: getPool() acquires mutex on every call
 - **Status:** Won't Do
@@ -460,6 +458,50 @@ Move entries here from GAP_ANALYSIS.md when resolution evidence is confirmed.
 
 ---
 
+## Resolved Gaps -- Pass 4 (2026-03-24)
+
+### SEC-0025: Network sinks skip sanitizeKey on JSON attribute keys
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 4)
+- **Resolution:** Added `sanitize` import and `sanitize.sanitizeKey()` call in all three network sinks' (tcp_sink.zig, udp_sink.zig, http_sink.zig) attribute iteration loops, consistent with all other handlers.
+- **Evidence:** `src/sinks/tcp_sink.zig:212` -- `const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);`; `src/sinks/udp_sink.zig:131` -- same pattern; `src/sinks/http_sink.zig:238` -- same pattern.
+
+### NEW-01 (Q-29): No unit tests for json_value.zig and text_value.zig
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 4)
+- **Resolution:** Added 12 inline tests to json_value.zig covering all Value variants (str, i64, u64, f64, f64 NaN/Inf, bool, secret, err, bytes, bytes empty, marshaler) and 11 inline tests to text_value.zig covering all Value variants (str, str sanitizes, i64, u64, f64, f64 NaN, f64 Inf, bool, bytes, err, secret, marshaler).
+- **Evidence:** `src/fmt/json_value.zig:94-157` -- 12 inline tests; `src/fmt/text_value.zig:71-157` -- 11 inline tests.
+
+### NEW-03 (Q-30): json_value.zig bytes truncation at 256 bytes
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 4)
+- **Resolution:** Buffer increased from 512 to 2048 bytes (max_input=1024 input bytes). Truncation marker "..." appended for inputs beyond 1024 bytes. Handles SHA-512 hashes, AES keys, and typical binary fields without truncation.
+- **Evidence:** `src/fmt/json_value.zig:49-70` -- `max_input = 1024`, `hex_buf: [max_input * 2]u8`, truncation marker `"..."` appended when `bytes.len > max_input`.
+
+### PERF-008: QueuedRecord ~12.5KB per entry (reduced to ~3.0KB)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 4)
+- **Resolution:** Reduced MAX_STORED_ATTRS from 32 to 8, MAX_VALUE_LEN from 256 to 128, msg_id_buf from 256 to 64, source_file_buf from 256 to 128. Result: ~3.0KB per entry, 3.0MB default queue (75% reduction from 12.2MB).
+- **Evidence:** `src/internal/queue.zig:34` -- `MAX_STORED_ATTRS = 8`; `:41` -- `MAX_VALUE_LEN = 128`; `:166` -- `msg_id_buf: [64]u8`; `:172` -- `source_file_buf: [128]u8`.
+
+### PERF-023: isSensitiveKey() O(k*p) linear scan (optimized)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 4)
+- **Resolution:** Replaced 15 sequential `std.mem.indexOf` calls with single-pass scan using comptime-unrolled `inline for` pattern matching. Added comptime `min_pattern_len` for early rejection of short keys.
+- **Evidence:** `src/util/redact.zig:33-34` -- `const min_pattern_len` computed at comptime; `:46` -- early rejection `if (key.len < min_pattern_len) return false;`; `:55-60` -- single-pass scan with `inline for (sensitive_keys) |pattern|`.
+
+### PERF-026: Async handler single-record processing (batch drain added)
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-03-24 (pass 4)
+- **Resolution:** Added batch drain: worker processes up to 32 records per wake cycle via `tryPop` after initial `popTimeout`. Extracted `processQueuedRecord` helper for shared logic.
+- **Evidence:** `src/handlers/async_handler.zig:98-99` -- `const max_batch_size: usize = 32;`; `:109-112` -- batch drain loop with `tryPop`; `:125` -- `fn processQueuedRecord` helper.
+
+### PERF-017: parallel.zig dead code
+- **Status:** Won't Do
+- **Reason:** Intentionally kept as published library module per commits 1fa06e6 ("Add spice-based parallel operations for slog") and 1041b15 ("Add documentation for parallel operations module"). Build-time impact is minor.
+
+---
+
 ## ID Registry
 
 The following Gap-IDs have been assigned. Never reuse an ID.
@@ -468,8 +510,8 @@ The following Gap-IDs have been assigned. Never reuse an ID.
 |-------|--------|
 | GAP-0001 through GAP-0025 | Assigned (see GAP_ANALYSIS.md) |
 | GAP-0036 | Assigned (SEC-0020, see GAP_ANALYSIS.md) |
-| SEC-0001 through SEC-0024 | Assigned (see GAP_ANALYSIS.md) |
+| SEC-0001 through SEC-0025 | Assigned (see GAP_ANALYSIS.md) |
 | PERF-001 through PERF-028 | Assigned (see PERF_GAP_ANALYSIS.md) |
-| Quality Rank 1-20, Q-21 through Q-28 | Assigned (see QUALITY_GAP_ANALYSIS.md) |
+| Quality Rank 1-20, Q-21 through Q-30, NEW-01, NEW-03 | Assigned (see QUALITY_GAP_ANALYSIS.md) |
 | GAP-0026 through GAP-0035 | Available |
 | GAP-0037+ | Available |

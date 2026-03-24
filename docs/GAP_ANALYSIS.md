@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main (commit 677630f)
-**Last updated:** 2026-03-24 (rev 3 -- pass 3: SEC-0006/SEC-0009 fixed, SEC-0020-0024 closed, SEC-0008 blocked)
+**Last updated:** 2026-03-24 (rev 4 -- pass 4: SEC-0025 added and closed, SEC-0008 remains blocked)
 **Analyst:** Phase 3 Adversarial Review + Claude Opus 4.6 (automated scoring)
 **Methodology:** Risk Score = Impact(1-5) x Likelihood(1-5) x 4
 
@@ -14,10 +14,10 @@
 |----------|-------|--------|---------|----------|------|
 | Critical | 2 | 2 | 0 | 0 | 0 |
 | High | 7 | 5 | 1 | 1 | 0 |
-| Medium | 9 | 8 | 0 | 1 | 0 |
+| Medium | 10 | 9 | 0 | 1 | 0 |
 | Low | 5 | 5 | 0 | 0 | 0 |
 | Info | 1 | 1 | 0 | 0 | 0 |
-| **Total** | **24** | **21** | **1** | **2** | **0** |
+| **Total** | **25** | **22** | **1** | **2** | **0** |
 
 ### Top Risks (Open Only)
 
@@ -59,6 +59,7 @@
 | 22 | SEC-0022 | Low | 12 | Windows Event Log unsanitized attribute keys | windows_eventlog.zig | CWE-117 / A03:2021 | windows_eventlog.zig:113 | sanitizeKey() applied to attr keys | -- | 2026-09-21 | **Closed** (pass 3: sanitize.sanitizeKey(&key_buf, attr.key) at windows_eventlog.zig:113) |
 | 23 | SEC-0023 | Low | 8 | Syslog writeSDString no control char escaping | syslog_rfc5424.zig | CWE-117 / A03:2021 | syslog_rfc5424.zig:268-284 | Control chars < 0x20 escaped as \\xHH, tab preserved per RFC5424 | -- | 2026-09-21 | **Closed** (pass 3: control chars 0x00-0x08, 0x0a-0x1f escaped as \\xHH via hex_chars lookup; tab preserved) |
 | 24 | SEC-0024 | Info | 4 | Gitleaks allowlist incomplete | .gitleaks.toml | CWE-798 / A07:2021 | .gitleaks.toml:8-13 | allowlist entries added for json_logging.zig and accept.zig | -- | Backlog | **Closed** (pass 3: .gitleaks.toml paths extended with json_logging.zig and tests/accept.zig) |
+| 25 | SEC-0025 | Medium | 24 | Network sinks skip sanitizeKey on JSON attr keys | tcp_sink.zig, udp_sink.zig, http_sink.zig | CWE-117 / A03:2021 | tcp_sink.zig:212, udp_sink.zig:131, http_sink.zig:238 | sanitize import and sanitizeKey call added in all three sinks' attr loops | -- | 2026-03-24 | **Closed** (pass 4: sanitize.sanitizeKey applied to attr keys in tcp_sink.zig:212, udp_sink.zig:131, http_sink.zig:238) |
 
 ---
 
@@ -1028,6 +1029,38 @@ paths = [
 
 ---
 
+### SEC-0025: Network sinks skip sanitizeKey on JSON attribute keys
+
+- **Severity:** Medium
+- **Risk Score:** 24 (Impact: 3 x Likelihood: 2 x 4)
+- **Confidence:** `confidence::confirmed`
+- **Exploit Surface:** Network-facing (if attribute keys contain user input)
+- **CWE:** CWE-117 (Improper Output Neutralization for Logs)
+- **OWASP:** A03:2021 Injection
+- **Status:** **Closed / Implemented** (pass 4)
+
+**Summary:** The TCP, UDP, and HTTP network sinks serialize record attributes into JSON output but did not apply `sanitize.sanitizeKey()` to attribute keys before writing them as JSON object keys. All text-mode handlers (text, journald, windows_eventlog, syslog, rotating_file) already applied key sanitization, but the three network sinks were missed.
+
+**Impact:** Attribute keys containing control characters or injection sequences could be written unsanitized into JSON output sent over the network, potentially confusing downstream log parsers or SIEM systems.
+
+**Likelihood:** Low-medium. Requires attribute keys to contain control characters, which is uncommon but possible when keys are derived from external input. Scored at 2.
+
+**Evidence:**
+- `src/sinks/tcp_sink.zig:212` -- `const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);`
+- `src/sinks/udp_sink.zig:131` -- `const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);`
+- `src/sinks/http_sink.zig:238` -- `const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);`
+
+**Fix:** Added `sanitize` import and `sanitize.sanitizeKey()` call in all three network sinks' attribute iteration loops, consistent with all other handlers.
+
+**Acceptance Criteria:**
+- [x] TCP sink applies sanitizeKey to attribute keys before JSON serialization
+- [x] UDP sink applies sanitizeKey to attribute keys before JSON serialization
+- [x] HTTP sink applies sanitizeKey to attribute keys before JSON serialization
+
+**SLA:** 2026-03-24 (completed)
+
+---
+
 ## Findings by Area
 
 ### Authentication and Authorization
@@ -1038,6 +1071,7 @@ paths = [
 - SEC-0003: HTTP header injection (High)
 - SEC-0004: TCP/UDP plaintext transmission (High)
 - SEC-0018: HTTP status check too permissive (Low)
+- SEC-0025: Network sinks skip sanitizeKey on JSON attr keys (Medium) -- Closed (pass 4)
 
 ### Input Validation / Injection
 - SEC-0006: Log injection via unsanitized messages -- Closed (pass 3) (High)
@@ -1151,3 +1185,4 @@ paths = [
 | SEC-0022 | (new) | Windows Event Log unsanitized attribute keys -- new finding |
 | SEC-0023 | (new) | Syslog writeSDString no control char escaping -- new finding |
 | SEC-0024 | (new) | Gitleaks allowlist incomplete -- new finding |
+| SEC-0025 | (new) | Network sinks skip sanitizeKey on JSON attr keys -- new finding (pass 4) |

@@ -2,24 +2,24 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main
-**Last updated:** 2026-03-24 (rev 2 -- pass 3: Q-21 through Q-28 resolved)
+**Last updated:** 2026-03-24 (rev 3 -- pass 4: NEW-01, NEW-03 closed)
 **Scoring framework:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
 
 ## Summary
 
-| Severity | Count | Closed | Won't Do | Open |
-|----------|-------|--------|----------|------|
-| Critical | 4 | 4 | 0 | 0 |
-| High | 7 | 6 | 1 | 0 |
-| Medium | 10 | 10 | 0 | 0 |
-| Low | 7 | 5 | 1 | 1 |
-| **Total** | **28** | **25** | **2** | **1** |
+| Severity | Count | Closed | Won't Do | Open | Partially Closed |
+|----------|-------|--------|----------|------|------------------|
+| Critical | 4 | 4 | 0 | 0 | 0 |
+| High | 7 | 6 | 1 | 0 | 0 |
+| Medium | 12 | 12 | 0 | 0 | 0 |
+| Low | 7 | 5 | 1 | 0 | 1 |
+| **Total** | **30** | **27** | **2** | **0** | **1** |
 
 ### Top Open Risks
 
-1. **deprecatedWriter() in slogz.zig** (PriorityScore 12) -- blocked on AnyWriter handler interface refactor.
+1. **deprecatedWriter() in slogz.zig** (PriorityScore 12) -- **Partially Closed**; windows_eventlog.zig fixed, slogz.zig blocked on AnyWriter handler interface refactor.
 
 ---
 
@@ -55,6 +55,8 @@
 | 26 | Low | 18 | perf | UDP sink serializes under mutex unlike TCP/HTTP | udp_sink.zig | Lines 132-133: `ctx.mutex.lock()` before JSON formatting; tcp_sink.zig:207 and http_sink.zig:239 format outside mutex then lock only for send | -- | JSON formatting moved outside mutex; lock only for ctx.send() | @maintainers | S | **Closed** |
 | 27 | Low | 12 | cleanup | deprecatedWriter() API usage at 3 call sites | slogz.zig, windows_eventlog.zig | slogz.zig:114, slogz.zig:128: `std.fs.File.stderr().deprecatedWriter().any()`; windows_eventlog.zig:135: `std.fs.File.stderr().deprecatedWriter()` | [#1](https://gitlab.com/devnw/zig/slog/-/issues/1) | Replace with current Zig 0.15 writer API | @maintainers | S | **Partially Closed** (windows_eventlog.zig fixed; slogz.zig blocked on AnyWriter handler interface refactor) |
 | 28 | Low | 8 | architecture | error.UnsupportedPlatform not in HandlerError | journald.zig, windows_eventlog.zig | journald.zig:67, windows_eventlog.zig:96: `return error.UnsupportedPlatform` in functions returning `HandlerError!void`; `UnsupportedPlatform` not in `HandlerError` error set | [#26](https://gitlab.com/devnw/zig/slog/-/issues/26) (Closed) | Use `error.FeatureDisabled` or add to `HandlerError` | @maintainers | S | **Closed** (#26) |
+| 29 | Medium | 36 | tests | No unit tests for json_value.zig and text_value.zig | src/fmt/json_value.zig, src/fmt/text_value.zig | Newly extracted shared modules had zero inline tests; all Value variants untested at the unit level | -- | Added 12 inline tests to json_value.zig and 11 inline tests to text_value.zig covering all Value variants | @maintainers | M | **Closed** (pass 4: 23 total inline tests added) |
+| 30 | Medium | 30 | architecture | json_value.zig bytes truncation at 256 bytes | src/fmt/json_value.zig | Original 512-byte hex buffer only supported 256 input bytes; SHA-512 hashes, AES keys, and typical binary fields exceed this | -- | Buffer increased from 512 to 2048 bytes (1024 input bytes); truncation marker "..." appended for inputs beyond 1024 bytes | @maintainers | S | **Closed** (pass 4: max_input=1024, hex_buf[2048], "..." truncation marker) |
 
 **Notes:**
 - Finding 15 (syslog @errorName guard) is a sub-instance of finding 11; they share a root cause and should be fixed together.
@@ -63,6 +65,8 @@
 - Finding 25 is a regression of finding 20; the previous fix (ec068d0) did not persist.
 - Finding 27 overlaps with existing issue #1; no new issue created.
 - Finding 28 overlaps with existing issue #26 (Closed); no new issue created.
+- Finding 29 (NEW-01) addresses missing unit test coverage for the shared json_value.zig and text_value.zig modules extracted in pass 3.
+- Finding 30 (NEW-03) addresses the json_value.zig bytes encoding buffer being too small for common binary fields (SHA-512, AES keys).
 
 ---
 
@@ -87,6 +91,7 @@
 | 23 | rotating_file missing sanitizeOutput() on .str | 60 | **Closed** |
 | 24 | rotating_file missing close vtable entry | 36 | **Closed** |
 | 28 | error.UnsupportedPlatform not in HandlerError | 8 | Closed |
+| 30 | json_value.zig bytes truncation at 256 bytes | 30 | **Closed** |
 
 ### ci-cd
 | Rank | Finding | PriorityScore | Status |
@@ -113,6 +118,7 @@
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 14 | FixedClock mechanism non-functional | 36 | Closed |
+| 29 | No unit tests for json_value.zig and text_value.zig | 36 | **Closed** |
 
 ### cleanup
 | Rank | Finding | PriorityScore | Status |

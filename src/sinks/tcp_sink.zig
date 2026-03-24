@@ -19,6 +19,7 @@ const HandlerError = @import("../handler.zig").HandlerError;
 const Clock = @import("../internal/clock.zig").Clock;
 const rfc3339 = @import("../fmt/rfc3339.zig");
 const redact = @import("../util/redact.zig");
+const sanitize = @import("../util/sanitize.zig");
 const metrics = @import("../metrics/metrics.zig");
 const writeJsonValue = @import("../fmt/json_value.zig").writeJsonValue;
 
@@ -206,8 +207,10 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     }
 
     // attrs
+    var key_buf: [sanitize.MAX_KEY_LENGTH]u8 = undefined;
     for (rec.attrs) |attr| {
-        enc.writeKey(attr.key) catch return error.WriteFailed;
+        const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);
+        enc.writeKey(sanitized_key) catch return error.WriteFailed;
         if (redact.isSensitiveKey(attr.key)) {
             enc.writeString(redact.REDACTED) catch return error.WriteFailed;
         } else {

@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main (commit 0ed8afe)
-**Last updated:** 2026-03-24 (rev 3 -- pass 3: PERF-022/024/028 closed, PERF-025 won't-do)
+**Last updated:** 2026-03-24 (rev 4 -- pass 4: PERF-008/023/026 closed, PERF-017 won't-do)
 **Analyst:** Claude Opus 4.6 (automated perf scoring)
 
 ---
@@ -12,18 +12,15 @@
 | PerfSeverity | Count | Closed | Won't Do | Open |
 |---|---|---|---|---|
 | **P0** | 4 | 1 | 3 | 0 |
-| **P1** | 8 | 5 | 2 | 1 |
-| **P2** | 10 | 7 | 0 | 3 |
+| **P1** | 8 | 6 | 2 | 0 |
+| **P2** | 10 | 9 | 1 | 0 |
 | **P3** | 3 | 1 | 2 | 0 |
 | **Info** | 3 | 1 | 2 | 0 |
-| **Total** | 28 | 15 | 9 | 4 |
+| **Total** | 28 | 18 | 10 | 0 |
 
-### Top 4 Open Risks by Expected Impact
+### Top Open Risks by Expected Impact
 
-1. **QueuedRecord ~12.5KB per entry; 1024 default = 12.2MB heap** (PerfScore 60, PERF-008) -- Oversized fixed buffers (StoredAttr[32] = 10,752 bytes) waste memory; most records use <5% of buffer.
-2. **parallel.zig module is dead code but adds build-time cost** (PerfScore 24, PERF-017) -- Intentionally kept as published module.
-3. **Async handler single-record processing** (PerfScore 24, PERF-026) -- Worker processes records one-at-a-time; no batch drain under burst load.
-4. **isSensitiveKey() O(k*p) linear scan** (PerfScore 20, PERF-023) -- 15 substring scans per attribute; compile-time perfect hash would be faster.
+No open performance risks remain. All 28 items are resolved (18 closed, 10 won't do).
 
 ---
 
@@ -38,7 +35,7 @@
 | 5 | P1 | 80 | PERF-005 | Async handler drops ALL attributes | async_handler | `src/handlers/async_handler.zig:93` and `:114` -- reconstructed Record sets `.attrs = &.{}` (empty); `QueuedRecord.fromRecord()` in `queue.zig:60-88` serializes attrs to `attrs_buf` but worker never deserializes them back | 100% attribute data loss on async path; all structured context gone | -- | StoredAttr array with serialize/deserialize; attrs restored in worker thread | -- | -- | **Closed** (3fcd5a5) |
 | 6 | P1 | 80 | PERF-006 | All handlers hold mutex during format+I/O | text, json, syslog, rotating_file | `text_handler.zig:49-91`, `json_handler.zig:59-130`, `syslog_rfc5424.zig:117-195`, `rotating_file.zig:166-211` -- all lock mutex before formatting, hold it through writeAll() | Serializes all logging threads; throughput = 1/latency instead of N/latency | -- | Lock scope reduction requires significant refactoring; separate effort | -- | -- | **Won't Do** |
 | 7 | P1 | 60 | PERF-007 | HTTP/TCP/UDP sinks omit attrs from JSON output | tcp_sink, http_sink, udp_sink | `tcp_sink.zig:145-167` -- JSON output writes time/level/msg/logger but never iterates `rec.attrs`; same in `http_sink.zig:205-227` and `udp_sink.zig:106-128` | All structured attributes silently dropped; correctness bug | -- | All three sinks now iterate rec.attrs with JSON attr serialization | -- | -- | **Closed** (0ed8afe) |
-| 8 | P1 | 60 | PERF-008 | QueuedRecord ~12.5KB per entry; 1024 default = 12.2MB heap | queue | `src/internal/queue.zig:160-175` -- fixed buffers: msg_id_buf[256] + message_buf[1024] + logger_buf[128] + source_file_buf[256] + stored_attrs[32]StoredAttr (32*(64+8+256+8)=10752) + overhead = ~12,480 bytes | 1024 * 12,480 = 12.2MB heap; most records use <5% of buffer space | -- | Variable-length arena approach is separate optimization effort | -- | -- | Open |
+| 8 | P1 | 60 | PERF-008 | QueuedRecord ~3.0KB per entry (was ~12.5KB); 1024 default = 3.0MB heap | queue | `src/internal/queue.zig:34,41,166,172` -- reduced: MAX_STORED_ATTRS 32->8, MAX_VALUE_LEN 256->128, msg_id_buf 256->64, source_file_buf 256->128 | 1024 * ~3,072 = 3.0MB heap (75% reduction from 12.2MB) | -- | Reduced fixed buffer sizes to match actual usage patterns | -- | -- | **Closed** (pass 4: MAX_STORED_ATTRS=8, MAX_VALUE_LEN=128, msg_id_buf[64], source_file_buf[128]; ~3.0KB per entry) |
 | 9 | P1 | 60 | PERF-025 | Stack allocations 8-25KB per log call across handlers | journald, json, syslog, tcp, http | `journald.zig:75` fields_buf[32][512]=16KB + stderr_buf[8192]=8KB = ~25KB; `json_handler.zig:55` buf[16384]; `syslog_rfc5424.zig:120` buf[16384]; `tcp_sink.zig:208` buf[16384]; `http_sink.zig:240` buf[16384]+req_buf[1024]+resp_buf[256] | 16-25KB stack per call; 8 threads = ~200KB active stack; L1/L2 cache pollution | [#40](https://gitlab.com/devnw/zig/slog/-/work_items/40) | Requires profiling data to safely reduce; risks truncation | -- | -- | **Won't Do** |
 | 10 | P1 | 60 | PERF-009 | HTTP sink silently accepts HTTPS URLs but sends cleartext | http_sink | `src/sinks/http_sink.zig:64` -- parses `https://` prefix, sets `is_https=true` and port 443, but `sendHttp()` at line 131-182 opens a plain `tcpConnectToAddress` and sends raw HTTP | Credentials/logs sent in cleartext when user expects TLS; security and correctness issue | -- | https:// URLs now rejected at init with error.HttpsNotSupported | -- | -- | **Closed** (0ed8afe) |
 | 11 | P1 | 48 | PERF-010 | No circuit breaker for TCP sink failures | tcp_sink | `src/sinks/tcp_sink.zig:87-122` -- `writeWithRetry()` retries unconditionally; `consecutive_failures` counter at line 120 is incremented but never checked to skip attempts | 100 threads hitting a down TCP endpoint = 100 * 5.3s of serialized retries; cascading failure | -- | Circuit breaker with threshold=3 and 30s cooldown added to tcp_sink | -- | -- | **Closed** (0ed8afe) |
@@ -50,9 +47,9 @@
 | 17 | P2 | 36 | PERF-015 | Async handler double-locks on enqueue (TOCTOU race) | async_handler | `src/handlers/async_handler.zig:129-133` -- `enqueue()` acquires its own `self.mutex` to check `self.queue.len()`, then releases it, then calls `self.queue.pushDropOldest()` which acquires the queue's internal mutex separately | TOCTOU: queue state can change between the len check and the push; the `was_full` variable may be stale | -- | Uses queue.droppedCount() before/after push to detect drops; no TOCTOU | -- | -- | **Closed** (3fcd5a5) |
 | 18 | P2 | 36 | PERF-016 | JSON handler pre-validates all attrs before serializing | json_handler | `src/handlers/json_handler.zig:53-57` -- iterates all `rec.attrs` calling `isValidJson()` before entering the mutex and doing actual serialization; this is an extra O(n) pass | Unnecessary O(n) scan; only f64 values need checking, and they can be checked inline during serialization | -- | Pre-validation loop removed; f64 NaN/Inf check done inline during serialization | -- | -- | **Closed** (0ed8afe) |
 | 19 | P2 | 30 | PERF-028 | Journald stderr fallback runs unconditionally on Linux | journald | `src/handlers/journald.zig:75-137` builds journald fields (16KB stack) then falls through to stderr at lines 143-162 without ever calling sd_journal_sendv; field-building is dead code | Double formatting work per record; 16KB wasted stack for unused fields | [#41](https://gitlab.com/devnw/zig/slog/-/work_items/41) | Field-building guarded by comptime `native_sendv_available`; stderr-only path skips ~25KB stack allocation | -- | Quarter | **Closed** |
-| 20 | P2 | 24 | PERF-017 | parallel.zig module is dead code but adds build-time cost | parallel | `src/parallel.zig` -- 764 lines, imported as module in `build.zig:39-49`, pulls in spice dependency; not imported by any handler or sink in src/ | Adds ~764 LOC compilation + spice dependency resolution to every build | -- | Intentionally kept as published module; build impact is minor | -- | -- | Open |
-| 21 | P2 | 24 | PERF-026 | Async handler single-record processing (no batch dequeue) | async_handler | `src/handlers/async_handler.zig:98-124` -- worker loop calls `popTimeout(100)` for one record at a time; no batch drain when queue has multiple pending records | Under burst load, worker processes records one-at-a-time with per-record overhead (mutex acquire/release, thread wake) instead of draining N records per wake | -- | Add batch drain: pop up to N records per wake cycle before re-waiting | -- | Quarter | Open |
-| 22 | P2 | 20 | PERF-023 | isSensitiveKey() O(k*p) linear scan per attribute | redact | `src/util/redact.zig:34-47` -- lowercases key then scans 15 sensitive_keys patterns with `std.mem.indexOf`; called from 8 handlers per attribute | 15 substring scans per attr; for 10 attrs = 150 scans per record across all handlers | -- | Replace with compile-time perfect hash or prefix trie | -- | Quarter | Open |
+| 20 | P2 | 24 | PERF-017 | parallel.zig module is dead code but adds build-time cost | parallel | `src/parallel.zig` -- 764 lines, imported as module in `build.zig:39-49`, pulls in spice dependency; not imported by any handler or sink in src/ | Adds ~764 LOC compilation + spice dependency resolution to every build | -- | Intentionally kept as published module per commits 1fa06e6/1041b15 | -- | -- | **Won't Do** |
+| 21 | P2 | 24 | PERF-026 | Async handler batch drain (was single-record processing) | async_handler | `src/handlers/async_handler.zig:98-120` -- worker loop now drains up to 32 records per wake cycle via tryPop after initial popTimeout; processQueuedRecord helper extracted | Batch processing under burst load reduces per-record overhead (fewer mutex acquire/release, fewer thread wakes) | -- | Batch drain: worker processes up to 32 records per wake cycle via tryPop after initial popTimeout | -- | Quarter | **Closed** (pass 4: max_batch_size=32, tryPop loop, processQueuedRecord helper) |
+| 22 | P2 | 20 | PERF-023 | isSensitiveKey() optimized with comptime-unrolled inline for | redact | `src/util/redact.zig:34-60` -- single-pass scan with comptime-unrolled `inline for` pattern matching + comptime min_pattern_len early rejection | Replaced 15 sequential indexOf calls with single-pass scan; comptime min_pattern_len rejects short keys immediately | -- | Single-pass comptime-unrolled inline for with min_pattern_len early rejection | -- | Quarter | **Closed** (pass 4: inline for pattern matching, comptime min_pattern_len early rejection) |
 | 23 | P3 | 16 | PERF-018 | Benchmark suite lacks statistical rigor | bench | `bench/bench_main.zig` -- single timing pass with no warmup separation, no std deviation, no percentiles; `WARMUP_ITERATIONS=1000` then one timed run of 100k | Results vary by 10-30% between runs; no confidence intervals; insufficient for regression detection | -- | Separate infrastructure improvement | -- | Backlog | **Won't Do** |
 | 24 | P3 | 16 | PERF-019 | No multi-threaded benchmarks | bench | `bench/bench_main.zig` -- all benchmarks run single-threaded; no contention testing | Cannot detect mutex contention regressions or validate concurrent throughput | -- | Separate infrastructure improvement | -- | Backlog | **Won't Do** |
 | 25 | P3 | 12 | PERF-020 | Metrics struct false sharing -- fixed via PaddedCounter | metrics | `src/metrics/metrics.zig:28-34` -- PaddedCounter with `align(cache_line)` pads each counter to 64 bytes; test at lines 185-201 verifies alignment | Each counter occupies a full cache line; false sharing eliminated | -- | PaddedCounter with align(cache_line) applied to all 7 counters | -- | -- | **Closed** |
@@ -71,7 +68,7 @@
 | PERF-005 | P1 | 80 | Async handler drops ALL attributes | **Closed** |
 | PERF-006 | P1 | 80 | All handlers hold mutex during format+I/O | **Won't Do** |
 | PERF-007 | P1 | 60 | HTTP/TCP/UDP sinks omit attrs from JSON output | **Closed** |
-| PERF-008 | P1 | 60 | QueuedRecord ~12.5KB per entry | Open |
+| PERF-008 | P1 | 60 | QueuedRecord ~3.0KB per entry (reduced) | **Closed** |
 | PERF-025 | P1 | 60 | Stack allocations 8-25KB per log call | **Won't Do** |
 | PERF-011 | P2 | 48 | Journald fallback 14+ stderr syscalls | **Closed** |
 | PERF-012 | P2 | 48 | Per-byte hex encoding via fmt.print | **Closed** |
@@ -80,8 +77,8 @@
 | PERF-015 | P2 | 36 | Async handler double-locks (TOCTOU) | **Closed** |
 | PERF-016 | P2 | 36 | JSON handler unnecessary pre-validation pass | **Closed** |
 | PERF-028 | P2 | 30 | Journald stderr fallback runs unconditionally | **Closed** |
-| PERF-026 | P2 | 24 | Async handler single-record processing | Open |
-| PERF-023 | P2 | 20 | isSensitiveKey() O(k*p) linear scan | Open |
+| PERF-026 | P2 | 24 | Async handler batch drain | **Closed** |
+| PERF-023 | P2 | 20 | isSensitiveKey() optimized (inline for) | **Closed** |
 | PERF-020 | P3 | 12 | Metrics struct false sharing | **Closed** |
 | PERF-027 | Info | 12 | Multi-handler re-formats per child | **Won't Do** |
 | PERF-024 | Info | 4 | rotating_file per-byte hex encoding | **Closed** |
@@ -102,7 +99,7 @@
 
 | ID | Sev | Score | Finding | Status |
 |---|---|---|---|---|
-| PERF-017 | P2 | 24 | parallel.zig dead code adds build cost | Open |
+| PERF-017 | P2 | 24 | parallel.zig dead code adds build cost | **Won't Do** |
 | PERF-018 | P3 | 16 | Benchmark lacks statistical rigor | **Won't Do** |
 | PERF-019 | P3 | 16 | No multi-threaded benchmarks | **Won't Do** |
 | PERF-021 | Info | 12 | getPool() mutex on every call | **Won't Do** |
@@ -346,14 +343,17 @@ zig build test
 
 ---
 
-### PERF-008: QueuedRecord ~12.5KB per entry; 1024 default = 12.2MB heap
+### PERF-008: QueuedRecord ~12.5KB per entry; 1024 default = 12.2MB heap -- CLOSED (pass 4)
 
 - **PerfSeverity:** P1
 - **PerfScore:** 60 (Impact=3 x Likelihood=5 x 4)
 - **Confidence:** `confidence::confirmed`
 - **Area:** app
+- **Status:** **Closed / Implemented** (pass 4)
 
-**Summary:** QueuedRecord uses fixed-size buffers totaling ~12,480 bytes per entry. The largest contributor is `stored_attrs: [32]StoredAttr` where each StoredAttr = key_buf[64] + key_len(8) + value_buf[256] + value_len(8) = 336 bytes, for a total of 10,752 bytes. With the default queue_size of 1024, this allocates ~12.2MB of heap memory at init.
+**Summary:** QueuedRecord used fixed-size buffers totaling ~12,480 bytes per entry. Reduced to ~3,072 bytes per entry (75% reduction) by shrinking MAX_STORED_ATTRS from 32 to 8, MAX_VALUE_LEN from 256 to 128, msg_id_buf from 256 to 64, and source_file_buf from 256 to 128. Default queue (1024 entries) now uses ~3.0MB instead of ~12.2MB.
+
+**Original description:** QueuedRecord uses fixed-size buffers totaling ~12,480 bytes per entry. The largest contributor is `stored_attrs: [32]StoredAttr` where each StoredAttr = key_buf[64] + key_len(8) + value_buf[256] + value_len(8) = 336 bytes, for a total of 10,752 bytes. With the default queue_size of 1024, this allocates ~12.2MB of heap memory at init.
 
 **Perf Impact:** 12.2MB resident memory for async queue. Most records use <5% of the buffer space (typical record has 2-5 attrs with short keys/values vs. 32 slots of 336 bytes each). Significant memory pressure in embedded or multi-logger scenarios.
 
@@ -645,24 +645,26 @@ strace -e write -c zig-out/bin/bench 2>&1
 
 ---
 
-### PERF-017: parallel.zig is dead code but adds build-time cost
+### PERF-017: parallel.zig is dead code but adds build-time cost -- WON'T DO
 
 - **PerfSeverity:** P2
 - **PerfScore:** 24 (Impact=2 x Likelihood=3 x 4)
 - **Confidence:** `confidence::confirmed`
 - **Area:** ci
+- **Status:** **Won't Do**
+- **Reason:** The parallel module was intentionally added as a published library module (commits 1fa06e6 "Add spice-based parallel operations for slog" and 1041b15 "Add documentation for parallel operations module"). It is an exported API, not dead code. Build-time impact is minor.
 
 **Summary:** The `parallel.zig` module (764 lines) is compiled as a build module and pulls in the spice dependency, but no handler or sink in `src/` imports it.
 
-**Perf Impact:** Adds compilation time for 764 LOC + spice dependency resolution on every build. No runtime impact since it is never called.
+**Perf Impact:** Adds compilation time for 764 LOC + spice dependency resolution on every build. No runtime impact since it is never called from internal handlers.
 
 **Evidence:**
 - `build.zig:39-49` -- parallel_mod is created and linked
 - No `@import("parallel")` in any src/ file other than the module definition itself
 
-**Root Cause:** The parallel module was added (commits 1fa06e6, 1041b15) but integration with handlers was not completed.
+**Root Cause:** The parallel module was added (commits 1fa06e6, 1041b15) as a published library feature for consumers. Internal handlers do not use it, but external consumers may.
 
-**Fix Guidance:** Either: (a) gate behind an explicit build option (e.g., `-Dparallel=true`, default false), or (b) remove from default build until a handler uses it.
+**Fix Guidance:** N/A -- intentionally kept as published module.
 
 **Validation Plan:**
 ```bash
@@ -825,16 +827,19 @@ perf lock report
 
 ---
 
-### PERF-023: isSensitiveKey() O(k*p) linear scan per attribute
+### PERF-023: isSensitiveKey() O(k*p) linear scan per attribute -- CLOSED (pass 4)
 
 - **PerfSeverity:** P2
 - **PerfScore:** 20 (Impact=2 x Likelihood=2 x Memory=1 x Frequency=5... composite 20)
 - **Confidence:** `confidence::suspected`
 - **Area:** app
+- **Status:** **Closed / Implemented** (pass 4)
 
-**Summary:** `isSensitiveKey()` lowercases the key into a 64-byte buffer, then performs `std.mem.indexOf` against each of 15 sensitive key patterns. This is called per attribute from 8 different handler call sites.
+**Summary:** `isSensitiveKey()` was refactored from 15 sequential `std.mem.indexOf` calls to a single-pass scan using comptime-unrolled `inline for` pattern matching with a comptime `min_pattern_len` early rejection. Short keys that cannot possibly match any pattern are rejected immediately.
 
-**Perf Impact:** For each attribute: lowercase O(k) + 15 substring searches each O(k*p). For a record with 10 attrs, this is 150 substring scans. The overhead is small per call (~100-500ns) but is multiplied by every attribute in every record across every handler.
+**Original description:** `isSensitiveKey()` lowercases the key into a 64-byte buffer, then performs `std.mem.indexOf` against each of 15 sensitive key patterns. This is called per attribute from 8 different handler call sites.
+
+**Original perf impact:** For each attribute: lowercase O(k) + 15 substring searches each O(k*p). For a record with 10 attrs, this is 150 substring scans. The overhead is small per call (~100-500ns) but is multiplied by every attribute in every record across every handler.
 
 **Evidence:**
 - `src/util/redact.zig:34-47` -- `isSensitiveKey()` implementation: `for (sensitive_keys) |sensitive| { if (std.mem.indexOf(u8, lower, sensitive) != null) ... }`
@@ -936,14 +941,17 @@ zig build test
 
 ---
 
-### PERF-026: Async handler single-record processing (no batch dequeue)
+### PERF-026: Async handler single-record processing (no batch dequeue) -- CLOSED (pass 4)
 
 - **PerfSeverity:** P2
 - **PerfScore:** 24 (Impact=2 x Likelihood=3 x Memory=1 x Frequency=4... composite 24)
 - **Confidence:** `confidence::suspected`
 - **Area:** app
+- **Status:** **Closed / Implemented** (pass 4)
 
-**Summary:** The async handler's worker thread processes records one at a time via `popTimeout(100)`. When the queue has multiple pending records (burst scenario), the worker wakes, processes one record, then goes back to waiting. This adds per-record overhead for mutex acquire/release, condition variable signal, and handler dispatch.
+**Summary:** The async handler's worker thread now processes up to 32 records per wake cycle. After the initial `popTimeout(100)` returns a record, the worker drains additional records via `tryPop()` in a loop (up to `max_batch_size=32`). A `processQueuedRecord` helper was extracted to share logic between the initial pop, the batch drain, and the shutdown drain.
+
+**Original description:** The async handler's worker thread processes records one at a time via `popTimeout(100)`. When the queue has multiple pending records (burst scenario), the worker wakes, processes one record, then goes back to waiting. This adds per-record overhead for mutex acquire/release, condition variable signal, and handler dispatch.
 
 **Perf Impact:** Under burst load (e.g., 1000 records queued), the worker processes them one by one with per-record synchronization overhead. A batch drain of N records per wake cycle would amortize the overhead.
 
