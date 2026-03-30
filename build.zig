@@ -32,6 +32,7 @@ pub fn build(b: *std.Build) void {
     const json_dep = b.dependency("json", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const json_mod = json_dep.module("json");
 
