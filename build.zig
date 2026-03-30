@@ -29,23 +29,24 @@ pub fn build(b: *std.Build) void {
     } else null;
 
     // Get dependencies
-    const json_dep = b.dependency("json", .{
-        .target = target,
-        .optimize = optimize,
-        .spice = false,
-    });
-    const json_mod = json_dep.module("json");
+    const use_json = b.option(bool, "json", "Use internal json dependency") orelse true;
+    const json_mod: ?*std.Build.Module = if (use_json) blk: {
+        const json_dep = b.dependency("json", .{
+            .target = target,
+            .optimize = optimize,
+            .spice = false,
+        });
+        break :blk json_dep.module("json");
+    } else null;
 
     // Main module (parallel.zig is part of the slogz module via relative import)
     const slogz_mod = b.addModule("slogz", .{
         .root_source_file = b.path("src/slogz.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "json", .module = json_mod },
-        },
     });
     slogz_mod.addOptions("build_options", build_options);
+    if (json_mod) |m| slogz_mod.addImport("json", m);
     if (spice_mod) |sm| {
         slogz_mod.addImport("spice", sm);
     }
@@ -61,12 +62,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/slogz.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "json", .module = json_mod },
-            },
         }),
     });
     unit_tests.root_module.addOptions("build_options", build_options);
+    if (json_mod) |m| unit_tests.root_module.addImport("json", m);
     if (spice_mod) |sm| {
         unit_tests.root_module.addImport("spice", sm);
     }
@@ -246,12 +245,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/slogz.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "json", .module = json_mod },
-            },
         }),
     });
     docs_lib.root_module.addOptions("build_options", build_options);
+    if (json_mod) |m| docs_lib.root_module.addImport("json", m);
     if (spice_mod) |sm| {
         docs_lib.root_module.addImport("spice", sm);
     }
