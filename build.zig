@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    slogz_mod.addOptions("build_options", build_options);
+    slogz_mod.addOptions("slog_build_options", build_options);
     if (json_mod) |m| slogz_mod.addImport("json", m);
     if (spice_mod) |sm| {
         slogz_mod.addImport("spice", sm);
@@ -64,7 +64,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    unit_tests.root_module.addOptions("build_options", build_options);
+    unit_tests.root_module.addOptions("slog_build_options", build_options);
     if (json_mod) |m| unit_tests.root_module.addImport("json", m);
     if (spice_mod) |sm| {
         unit_tests.root_module.addImport("spice", sm);
@@ -88,7 +88,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    accept_tests.root_module.addOptions("build_options", build_options);
+    accept_tests.root_module.addOptions("slog_build_options", build_options);
     if (feature_journald) {
         accept_tests.root_module.linkSystemLibrary("systemd", .{});
     }
@@ -247,7 +247,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    docs_lib.root_module.addOptions("build_options", build_options);
+    docs_lib.root_module.addOptions("slog_build_options", build_options);
     if (json_mod) |m| docs_lib.root_module.addImport("json", m);
     if (spice_mod) |sm| {
         docs_lib.root_module.addImport("spice", sm);
