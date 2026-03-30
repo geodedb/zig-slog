@@ -17,7 +17,6 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(bool, "feature_journald", feature_journald);
     build_options.addOption(bool, "feature_windows_eventlog", feature_windows_eventlog);
-    build_options.addOption(bool, "enable_spice", enable_spice);
 
     // Get spice dependency if enabled
     const spice_mod: ?*std.Build.Module = if (enable_spice) blk: {
@@ -45,7 +44,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    slogz_mod.addOptions("slog_build_options", build_options);
     if (json_mod) |m| slogz_mod.addImport("json", m);
     if (spice_mod) |sm| {
         slogz_mod.addImport("spice", sm);
@@ -64,7 +62,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    unit_tests.root_module.addOptions("slog_build_options", build_options);
     if (json_mod) |m| unit_tests.root_module.addImport("json", m);
     if (spice_mod) |sm| {
         unit_tests.root_module.addImport("spice", sm);
@@ -88,7 +85,6 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    accept_tests.root_module.addOptions("slog_build_options", build_options);
     if (feature_journald) {
         accept_tests.root_module.linkSystemLibrary("systemd", .{});
     }
@@ -247,7 +243,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    docs_lib.root_module.addOptions("slog_build_options", build_options);
     if (json_mod) |m| docs_lib.root_module.addImport("json", m);
     if (spice_mod) |sm| {
         docs_lib.root_module.addImport("spice", sm);

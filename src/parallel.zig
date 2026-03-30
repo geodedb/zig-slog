@@ -52,9 +52,8 @@
 //! | Batch Flush      | 8 batches   | Yes              |
 
 const std = @import("std");
-const build_options = @import("slog_build_options");
 
-const spice = if (build_options.enable_spice) @import("spice") else struct {
+const spice = if (true) @import("spice") else struct {
     pub const ThreadPool = void;
     pub const Task = void;
     pub fn Future(comptime I: type, comptime O: type) type {
@@ -68,7 +67,7 @@ const spice = if (build_options.enable_spice) @import("spice") else struct {
 // Global Thread Pool
 // ============================================================================
 
-var global_pool: if (build_options.enable_spice) ?spice.ThreadPool else void = if (build_options.enable_spice) null else {};
+var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
 /// Atomic flag for the fast-path of the double-checked locking pattern.
 /// Set to true after global_pool has been fully initialized.
 var pool_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -81,7 +80,7 @@ var pool_mutex: std.Thread.Mutex = .{};
 /// count. If not called, `getPool()` will lazily initialize with
 /// `page_allocator` and default configuration.
 pub fn initPool(allocator: std.mem.Allocator, config: spice.ThreadPoolConfig) void {
-    if (!build_options.enable_spice) return;
+    // spice always enabled when this module is compiled
 
     pool_mutex.lock();
     defer pool_mutex.unlock();
@@ -93,8 +92,8 @@ pub fn initPool(allocator: std.mem.Allocator, config: spice.ThreadPoolConfig) vo
     }
 }
 
-pub fn getPool() if (build_options.enable_spice) *spice.ThreadPool else void {
-    if (!build_options.enable_spice) return;
+pub fn getPool() if (true) *spice.ThreadPool else void {
+    // spice always enabled when this module is compiled
 
     // Fast path: atomic load avoids the mutex when already initialized.
     if (pool_initialized.load(.acquire)) {
@@ -114,7 +113,7 @@ pub fn getPool() if (build_options.enable_spice) *spice.ThreadPool else void {
 }
 
 pub fn deinitPool() void {
-    if (!build_options.enable_spice) return;
+    // spice always enabled when this module is compiled
 
     pool_mutex.lock();
     defer pool_mutex.unlock();
@@ -178,7 +177,7 @@ pub fn parallelRecordFormat(
     std.debug.assert(inputs.len == buffers.len);
     std.debug.assert(inputs.len == results.len);
 
-    if (!build_options.enable_spice or inputs.len < 8) {
+    if (!true or inputs.len < 8) {
         for (inputs, 0..) |input, i| {
             results[i] = formatter(input, buffers[i]);
         }
@@ -272,7 +271,7 @@ pub fn parallelHandlerDispatch(
 ) void {
     std.debug.assert(handlers.len == results.len);
 
-    if (!build_options.enable_spice or handlers.len < 2) {
+    if (!true or handlers.len < 2) {
         for (handlers, 0..) |handler, i| {
             results[i] = handler.handler_fn(handler.handler_ptr, record_data);
         }
@@ -366,7 +365,7 @@ pub fn parallelSinkWrite(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!build_options.enable_spice or inputs.len < 4) {
+    if (!true or inputs.len < 4) {
         for (inputs, 0..) |input, i| {
             results[i] = writer(input.sink_ptr, input.data, input.flush);
         }
@@ -459,7 +458,7 @@ pub fn parallelBatchFlush(
 ) void {
     std.debug.assert(targets.len == results.len);
 
-    if (!build_options.enable_spice or targets.len < 2) {
+    if (!true or targets.len < 2) {
         for (targets, 0..) |target, i| {
             results[i] = flusher(target.sink_ptr, target.timeout_ms);
         }
@@ -540,7 +539,7 @@ pub fn dispatchHandlers(
 ) void {
     std.debug.assert(handlers.len == results.len);
 
-    if (!build_options.enable_spice or handlers.len < 2) {
+    if (!true or handlers.len < 2) {
         for (handlers, 0..) |h, i| {
             h.handle(record) catch |err| {
                 results[i] = .{ .err = err };
@@ -625,7 +624,7 @@ pub fn flushHandlers(
 ) void {
     std.debug.assert(handlers.len == results.len);
 
-    if (!build_options.enable_spice or handlers.len < 2) {
+    if (!true or handlers.len < 2) {
         for (handlers, 0..) |h, i| {
             h.flush(timeout_ms) catch |err| {
                 results[i] = .{ .err = err };
@@ -686,7 +685,7 @@ fn multiFlushTask(t: *spice.Task, ctx: MultiFlushContext) void {
 // ============================================================================
 
 test "parallel record format" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const testFormatter = struct {
         fn format(input: RecordInput, buffer: []u8) FormattedRecord {
@@ -729,7 +728,7 @@ test "parallel record format" {
 }
 
 test "parallel handler dispatch" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const TestHandler = struct {
         fn dispatch(ptr: *anyopaque, record_data: []const u8) DispatchResult {
@@ -761,7 +760,7 @@ test "parallel handler dispatch" {
 }
 
 test "parallel handler dispatch - empty record" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const TestHandler = struct {
         fn dispatch(ptr: *anyopaque, record_data: []const u8) DispatchResult {
@@ -793,7 +792,7 @@ test "parallel handler dispatch - empty record" {
 }
 
 test "parallel sink write" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const testWriter = struct {
         fn write(sink_ptr: *anyopaque, data: []const u8, flush: bool) WriteResult {
@@ -828,7 +827,7 @@ test "parallel sink write" {
 }
 
 test "parallel sink write - with flush" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const testWriter = struct {
         fn write(sink_ptr: *anyopaque, data: []const u8, flush: bool) WriteResult {
@@ -861,7 +860,7 @@ test "parallel sink write - with flush" {
 }
 
 test "parallel batch flush" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const testFlusher = struct {
         fn flush(sink_ptr: *anyopaque, timeout_ms: u32) FlushResult {
@@ -895,7 +894,7 @@ test "parallel batch flush" {
 }
 
 test "parallel batch flush - timeout" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     const testFlusher = struct {
         fn flush(sink_ptr: *anyopaque, timeout_ms: u32) FlushResult {
