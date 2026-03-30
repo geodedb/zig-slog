@@ -13,8 +13,8 @@
     },
     .dependencies = .{
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#90330b1bf92ad861047883bdba80f802f6e239da",
-            .hash = "json-0.1.0-tOue4RypCwDXk2KkJTmCxFvgzNQIjLQPSk9w-8dtGDaO",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#66fa479dba7ba3692fb1eb8eebf760346a199256",
+            .hash = "json-0.1.0-tOue4RqoCwBSxfxE0svlreACrqTF3W_INI_gwM6rmsZf",
         },
         .spice = .{
             .url = "git+https://gitlab.com/devnw/zig/spice.git#bbf106dc8131a514a4d1687cc2173f124f5c8181",
