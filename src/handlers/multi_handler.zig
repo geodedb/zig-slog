@@ -14,6 +14,7 @@ const Record = @import("../record.zig").Record;
 const Handler = @import("../handler.zig").Handler;
 const HandlerVTable = @import("../handler.zig").HandlerVTable;
 const HandlerError = @import("../handler.zig").HandlerError;
+const parallel = @import("../parallel.zig");
 
 /// Multi-handler context holding a slice of child handlers.
 pub const Context = struct {
@@ -27,20 +28,35 @@ pub const Context = struct {
     pub fn deinit(_: *Context) void {}
 };
 
+/// Maximum number of handlers that can be dispatched in parallel
+/// without heap allocation (stack-allocated result buffer).
+const MAX_PARALLEL_HANDLERS = 16;
+
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
     const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
     if (!rec.level.atLeast(current_level)) return;
 
-    var first_err: ?HandlerError = null;
-    for (ctx.handlers) |h| {
-        h.handle(rec) catch |err| {
-            if (first_err == null) first_err = err;
-        };
-    }
+    if (ctx.handlers.len <= MAX_PARALLEL_HANDLERS) {
+        var results: [MAX_PARALLEL_HANDLERS]parallel.MultiHandlerResult = undefined;
+        parallel.dispatchHandlers(ctx.handlers, rec, results[0..ctx.handlers.len]);
 
-    if (first_err) |err| return err;
+        var first_err: ?HandlerError = null;
+        for (results[0..ctx.handlers.len]) |r| {
+            if (r.err != null and first_err == null) first_err = r.err;
+        }
+        if (first_err) |err| return err;
+    } else {
+        // Fallback for > MAX_PARALLEL_HANDLERS: sequential dispatch
+        var first_err: ?HandlerError = null;
+        for (ctx.handlers) |h| {
+            h.handle(rec) catch |err| {
+                if (first_err == null) first_err = err;
+            };
+        }
+        if (first_err) |err| return err;
+    }
 }
 
 fn withAttrs(ctx_ptr: *anyopaque, _: []const Attr) Handler {
@@ -69,14 +85,24 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
 fn flush(ctx_ptr: *anyopaque, timeout_ms: u32) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    var first_err: ?HandlerError = null;
-    for (ctx.handlers) |h| {
-        h.flush(timeout_ms) catch |err| {
-            if (first_err == null) first_err = err;
-        };
-    }
+    if (ctx.handlers.len <= MAX_PARALLEL_HANDLERS) {
+        var results: [MAX_PARALLEL_HANDLERS]parallel.MultiFlushResult = undefined;
+        parallel.flushHandlers(ctx.handlers, timeout_ms, results[0..ctx.handlers.len]);
 
-    if (first_err) |err| return err;
+        var first_err: ?HandlerError = null;
+        for (results[0..ctx.handlers.len]) |r| {
+            if (r.err != null and first_err == null) first_err = r.err;
+        }
+        if (first_err) |err| return err;
+    } else {
+        var first_err: ?HandlerError = null;
+        for (ctx.handlers) |h| {
+            h.flush(timeout_ms) catch |err| {
+                if (first_err == null) first_err = err;
+            };
+        }
+        if (first_err) |err| return err;
+    }
 }
 
 fn getLevel(ctx_ptr: *anyopaque) Level {

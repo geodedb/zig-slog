@@ -107,6 +107,7 @@ All other items are Closed, Won't Do, or Blocked. No open items remain.
 **Likelihood:** Trivially exploitable. Any network observer between the application and the log endpoint can intercept traffic. No authentication or special access required. Pre-auth, remote.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:64-65` -- `is_https = true` set for HTTPS URLs
 - `src/sinks/http_sink.zig:131-141` -- `sendHttp()` uses `std.net.tcpConnectToAddress()` (plain TCP) regardless of `is_https`
 - `src/sinks/http_sink.zig:93-104` -- `is_https` stored in Context but never referenced in send path
@@ -127,11 +128,13 @@ fn sendHttp(self: *Context, data: []const u8) bool {
 **Attack Scenario:** An application configures `HttpOptions{ .url = "https://logs.corp.example.com/ingest" }`. The developer believes TLS protects the log stream. An attacker on the same network segment captures all log data in plaintext, including any sensitive attributes, internal hostnames, user identifiers, and error details.
 
 **Fix Guidance:**
+
 1. When `is_https == true`, perform a TLS handshake using `std.crypto.tls.Client` or an imported TLS library after TCP connect.
 2. Validate server certificates against system CA store.
 3. If TLS support is not yet implemented, **reject `https://` URLs at `Context.init()` time** with a clear error so users are not silently downgraded to plaintext.
 
 **Acceptance Criteria:**
+
 - [ ] `Context.init()` with an `https://` URL either establishes a TLS connection or returns a compile-time or runtime error
 - [ ] Plain TCP is used only for `http://` URLs
 - [ ] A test verifies that `is_https == true` triggers TLS or error
@@ -158,6 +161,7 @@ fn sendHttp(self: *Context, data: []const u8) bool {
 **Likelihood:** Requires a caller to use the convenience API (likely for new users). The UB may not always manifest depending on stack reuse patterns, but it is guaranteed to be incorrect. Scored at 3 because the bug requires the specific calling pattern, but that pattern is the documented/intended usage.
 
 **Evidence:**
+
 - `src/slogz.zig:107-117` -- `stderrHandler` creates local `ctx`, returns struct with copy
 
 ```zig
@@ -180,11 +184,13 @@ pub fn stderrHandler(level: Level) struct { ctx: text.Context, handler: Handler 
 **Attack Scenario:** A user follows the convenience API pattern. The returned `handler` field contains a `ctx` pointer to a dead stack frame. When a log record is written, the handler dereferences the dangling pointer. Depending on what has been allocated in that stack region, this causes crashes or data corruption. In a security-sensitive context, controlled stack manipulation could exploit this for code execution.
 
 **Fix Guidance:** Either:
+
 1. Return only the `Context` and require the caller to call `init(&result.ctx)` after assignment, or
 2. Take the address of the returned struct's `.ctx` field after it is placed at its final address, or
 3. Accept an allocator and heap-allocate the context.
 
 **Acceptance Criteria:**
+
 - [ ] `stderrHandler()` returns a handler whose `ctx` pointer is valid for the lifetime of the returned context
 - [ ] A test exercises the returned handler by writing a record and verifying correct output (no UB under AddressSanitizer)
 - [ ] Same fix applied to `stderrJsonHandler()`
@@ -211,6 +217,7 @@ pub fn stderrHandler(level: Level) struct { ctx: text.Context, handler: Handler 
 **Likelihood:** Requires attacker to control header configuration values. In many deployments, headers are set from environment variables or config files, which are common injection vectors. Scored at 4 because the attack requires specific control over configuration.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:157-161` -- Headers written directly to stream with no validation
 
 ```zig
@@ -224,11 +231,13 @@ for (self.options.headers) |header| {
 ```
 
 **Fix Guidance:**
+
 1. Validate both header names and values in `HttpOptions` or at `Context.init()` time.
 2. Reject any header name/value containing `\r`, `\n`, or other control characters (bytes < 0x20 except HT).
 3. Validate header names match the RFC 7230 token rule.
 
 **Acceptance Criteria:**
+
 - [ ] Header names and values are validated against RFC 7230 at init or write time
 - [ ] Headers containing CR, LF, or NUL are rejected with an error
 - [ ] Test verifies that malicious headers are rejected
@@ -255,15 +264,18 @@ for (self.options.headers) |header| {
 **Likelihood:** Scored at 3 -- requires network position to intercept. Lower than SEC-0001 because no false sense of security exists (no `tls://` option claimed).
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig:65-78` -- `connect()` uses raw TCP only
 - `src/sinks/udp_sink.zig:48-52` -- raw UDP socket with no encryption
 
 **Fix Guidance:**
+
 1. Add an optional TLS wrapper for TCP sink (e.g., `TcpOptions.tls: bool = false`).
 2. Document that UDP sink is inherently plaintext and should only be used on trusted networks.
 3. At minimum, add prominent documentation warnings about plaintext transmission.
 
 **Acceptance Criteria:**
+
 - [ ] TCP sink supports optional TLS via configuration
 - [ ] Documentation clearly states plaintext risk for both sinks
 - [ ] UDP sink documentation recommends trusted network only
@@ -288,15 +300,18 @@ for (self.options.headers) |header| {
 **Likelihood:** High. Developers commonly log request parameters, configuration values, and error contexts that include sensitive keys. The existence of `isSensitiveKey()` suggests this was anticipated. The fact that it is unwired means the safety net does not function. Scored at 4 because it requires a developer to use `Attr.string()` instead of `Attr.secret()` for sensitive data, which is the natural/common pattern.
 
 **Evidence:**
+
 - `src/util/redact.zig:34-48` -- `isSensitiveKey()` defined and tested
 - No call to `isSensitiveKey` in any handler (text_handler.zig, json_handler.zig, syslog_rfc5424.zig, rotating_file.zig, journald.zig)
 
 **Fix Guidance:**
+
 1. In each handler's `writeAttr`/`writeValue` function, check `redact.isSensitiveKey(attr.key)` before writing the value.
 2. If the key is sensitive, output `[REDACTED]` instead of the actual value.
 3. Consider making auto-redaction configurable (opt-out rather than opt-in) for maximum safety.
 
 **Acceptance Criteria:**
+
 - [ ] `Attr.string("password", "secret123")` is redacted to `password=[REDACTED]` in output
 - [ ] All handlers (text, JSON, syslog, rotating_file, journald) call `isSensitiveKey()`
 - [ ] Test verifies auto-redaction for each handler type
@@ -328,6 +343,7 @@ for (self.options.headers) |header| {
 **Likelihood:** High. Log messages frequently contain user-supplied data (request paths, usernames, error messages from external services). Scored at 4 because many applications pass user-controlled strings into log messages.
 
 **Evidence:**
+
 - `src/handlers/rotating_file.zig:298` -- `writer.writeAll(rec.message)` (NO sanitizeOutput)
 - `src/handlers/rotating_file.zig:303` -- `writer.writeAll(attr.key)` (NO sanitizeKey)
 - `src/handlers/rotating_file.zig:316` -- `.str => |s| try writer.writeAll(s)` (NO sanitizeOutput on string values)
@@ -349,6 +365,7 @@ for (rec.attrs) |attr| {
 ```
 
 **Comparison -- all other handlers are fixed:**
+
 - `text_handler.zig:73`: `sanitize.sanitizeOutput(writer, rec.message)` -- FIXED
 - `text_handler.zig:103`: `sanitize.sanitizeKey(&key_buf, attr.key)` -- FIXED
 - `text_handler.zig:122`: `sanitize.sanitizeOutput(writer, s)` for strings -- FIXED
@@ -357,11 +374,13 @@ for (rec.attrs) |attr| {
 - `windows_eventlog.zig:107`: `sanitize.sanitizeOutput(writer, rec.message)` -- FIXED
 
 **Fix Guidance:**
+
 1. Replace `writer.writeAll(rec.message)` with `sanitize.sanitizeOutput(writer, rec.message)` at line 298.
 2. Replace `writer.writeAll(attr.key)` with `sanitize.sanitizeKey()` usage at line 303.
 3. Replace `.str => |s| try writer.writeAll(s)` with `.str => |s| try sanitize.sanitizeOutput(writer, s)` at line 316.
 
 **Acceptance Criteria:**
+
 - [ ] `rotating_file.zig` calls `sanitize.sanitizeOutput()` on `rec.message`
 - [ ] `rotating_file.zig` calls `sanitize.sanitizeKey()` on attribute keys
 - [ ] `rotating_file.zig` calls `sanitize.sanitizeOutput()` on string attribute values
@@ -387,6 +406,7 @@ for (rec.attrs) |attr| {
 **Likelihood:** Requires attacker control of the `path` configuration value. In many deployments this comes from environment variables or config files. Scored at 3 because it requires configuration injection.
 
 **Evidence:**
+
 - `src/handlers/rotating_file.zig:69-84` -- `openFile()` uses path directly
 
 ```zig
@@ -402,11 +422,13 @@ fn openFile(self: *Context) !void {
 ```
 
 **Fix Guidance:**
+
 1. Validate `path` at `Context.init()` time: reject paths containing `..` components.
 2. Resolve the path to an absolute canonical form and verify it is within the expected log directory.
 3. Consider using `openDirAbsolute` with restricted options instead of `cwd()`.
 
 **Acceptance Criteria:**
+
 - [ ] Paths containing `..` are rejected at init time with an error
 - [ ] Symlinks in the path do not allow escaping the intended directory
 - [ ] Test verifies path traversal attempt is rejected
@@ -431,6 +453,7 @@ fn openFile(self: *Context) !void {
 **Likelihood:** Requires compromise of the spice repository or an accidental breaking change on main. Scored at 3 because this is an internal dependency (same org), but the pattern is still risky.
 
 **Evidence:**
+
 - `build.zig.zon:19-22`
 
 ```zon
@@ -443,11 +466,13 @@ fn openFile(self: *Context) !void {
 - Compare with json dependency on line 16-17 which correctly uses `/v0.1.0/`
 
 **Fix Guidance:**
+
 1. Tag a release of the spice repository.
 2. Update `build.zig.zon` to reference the tagged release URL (e.g., `.../archive/v0.1.0/spice-v0.1.0.tar.gz`).
 3. Update the hash to match the tagged archive.
 
 **Acceptance Criteria:**
+
 - [ ] `spice` dependency URL references a tagged release, not `main`
 - [ ] Hash is updated to match the tagged release archive
 
@@ -476,6 +501,7 @@ fn openFile(self: *Context) !void {
 **Likelihood:** Scored at 3 because it requires use of the rotating file handler with sensitive-key-named attributes using `Attr.string()` instead of `Attr.secret()`. This is the natural/common pattern, however.
 
 **Evidence:**
+
 - `src/handlers/rotating_file.zig:300-306` -- attribute loop with NO isSensitiveKey check
 
 ```zig
@@ -490,6 +516,7 @@ for (rec.attrs) |attr| {
 ```
 
 **Comparison -- all other handlers check isSensitiveKey():**
+
 - `text_handler.zig:108`: `if (redact.isSensitiveKey(attr.key))` -- PRESENT
 - `json_handler.zig:145`: `if (redact.isSensitiveKey(attr.key))` -- PRESENT
 - `syslog_rfc5424.zig:225`: `if (redact.isSensitiveKey(attr.key))` -- PRESENT
@@ -500,10 +527,12 @@ for (rec.attrs) |attr| {
 **Note:** The `.secret` value type IS correctly handled at line 341: `.secret => try writer.writeAll(redact.REDACTED)`. The gap is specifically the `isSensitiveKey()` auto-redaction for attributes created with `Attr.string()` that happen to have sensitive key names.
 
 **Fix Guidance:**
+
 1. Add `if (redact.isSensitiveKey(attr.key))` check in the attribute loop at line 300-306.
 2. If the key is sensitive, output `redact.REDACTED` instead of calling `writeValue()`.
 
 **Acceptance Criteria:**
+
 - [ ] `Attr.string("password", "hunter2")` outputs `password=[REDACTED]` in rotating file output
 - [ ] `Attr.string("api_key", "sk_live_abc")` outputs `api_key=[REDACTED]` in rotating file output
 - [ ] `Attr.secret("key", "value")` continues to output `key=[REDACTED]` (existing behavior preserved)
@@ -529,6 +558,7 @@ for (rec.attrs) |attr| {
 **Likelihood:** Slightly lower than SEC-0006 because attribute values are less commonly user-controlled than messages. Scored at 4 because structured logging encourages logging request parameters as attributes.
 
 **Evidence:**
+
 - `src/handlers/text_handler.zig:113-119`
 
 ```zig
@@ -545,6 +575,7 @@ for (rec.attrs) |attr| {
 **Fix Guidance:** Escape `\n`, `\r`, `\\`, `"`, and control characters within string values before output.
 
 **Acceptance Criteria:**
+
 - [ ] String values containing `\n` are escaped in output
 - [ ] Test verifies no raw newline in formatted output
 
@@ -568,12 +599,14 @@ for (rec.attrs) |attr| {
 **Likelihood:** Low in practice -- requires concurrent fatal logging and hook modification, which is a rare sequence. Scored at 2.
 
 **Evidence:**
+
 - `src/logger.zig:26` -- `pub var fatal_hook: *const fn (*const Record) void = defaultFatalHook;`
 - `src/logger.zig:148-149` -- Read of `fatal_hook` without lock
 
 **Fix Guidance:** Use `std.atomic.Value(*const fn (*const Record) void)` for atomic read/write, or protect with a module-level mutex.
 
 **Acceptance Criteria:**
+
 - [ ] `fatal_hook` read/write uses atomic operations
 - [ ] Concurrent read+write does not produce UB
 
@@ -597,6 +630,7 @@ for (rec.attrs) |attr| {
 **Likelihood:** Requires process memory access (debugger, core dump, `/proc/pid/mem`). Scored at 2.
 
 **Evidence:**
+
 - `src/value.zig:12-22`
 
 ```zig
@@ -607,11 +641,13 @@ pub const Secret = struct {
 ```
 
 **Fix Guidance:**
+
 1. Document this as a known limitation in API docs.
 2. Consider zeroing the value after the Secret is consumed, though Zig's optimizer may elide the zeroing.
 3. For defense-in-depth, consider XOR-masking the value with a random key generated at Secret.init time.
 
 **Acceptance Criteria:**
+
 - [ ] Limitation is documented in API documentation
 - [ ] Consider implementing memory scrubbing if feasible
 
@@ -635,15 +671,18 @@ pub const Secret = struct {
 **Likelihood:** Low direct exploitability. Scored at 2 because the current behavior accidentally protects secrets by dropping them.
 
 **Evidence:**
+
 - `src/internal/queue.zig:72-81` -- `fromRecord()` serializes value types
 - `src/handlers/async_handler.zig:93` -- `.attrs = &.{}` in reconstructed record
 
 **Fix Guidance:**
+
 1. When serializing attributes in `QueuedRecord`, preserve the type tag for each value.
 2. For `.secret` values, serialize only the `[REDACTED]` marker, never the plaintext.
 3. When deserializing in the worker thread, reconstruct attributes with proper types.
 
 **Acceptance Criteria:**
+
 - [ ] Async handler output includes all attributes
 - [ ] Secret attributes are redacted in async output (not exposed, not dropped)
 
@@ -667,6 +706,7 @@ pub const Secret = struct {
 **Likelihood:** Low -- requires accidental secret commit to test/example files. Scored at 2.
 
 **Evidence:**
+
 - `.gitleaks.toml:9-12`
 
 ```toml
@@ -678,6 +718,7 @@ paths = [
 ```
 
 **Fix Guidance:** Narrow the exclusion to only the specific file(s) that contain intentional demo credentials:
+
 ```toml
 paths = [
     '''examples/secret_redaction\.zig''',
@@ -685,6 +726,7 @@ paths = [
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Gitleaks exclusion covers only specific demo files, not entire directories
 - [ ] `tests/` directory is scanned by gitleaks
 
@@ -708,16 +750,19 @@ paths = [
 **Likelihood:** Certain to be encountered by anyone reading SECURITY.md. Scored high on likelihood but low on impact.
 
 **Evidence:**
+
 - `SECURITY.md:35` -- "No external C dependencies (stdlib only)"
 - `SECURITY.md:37` -- "Fuzz testing for parser inputs"
 - No fuzz test files exist in the repository
 - `build.zig.zon:14-23` -- external dependencies exist
 
 **Fix Guidance:**
+
 1. Remove the fuzz testing claim or implement fuzz testing.
 2. Update the dependency claim to: "No external C dependencies in default configuration (libsystemd optional for journald feature). External Zig dependencies: json, spice."
 
 **Acceptance Criteria:**
+
 - [ ] All claims in SECURITY.md are accurate
 - [ ] Either fuzz tests exist or the claim is removed
 
@@ -741,15 +786,18 @@ paths = [
 **Likelihood:** Requires network-level attack or misconfiguration. Common in many logging setups but the risk is well-understood.
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig` -- no authentication options in `TcpOptions`
 - `src/sinks/udp_sink.zig` -- no authentication options in `UdpOptions`
 
 **Fix Guidance:**
+
 1. Document the lack of authentication as a known limitation.
 2. Add optional TLS client certificate (mTLS) support for TCP sink.
 3. Consider adding an optional `Authorization` or custom auth header for HTTP sink.
 
 **Acceptance Criteria:**
+
 - [ ] Documentation clearly states the authentication limitation
 - [ ] TCP sink supports optional mTLS (longer term)
 
@@ -771,12 +819,14 @@ paths = [
 **Impact:** Code changes can be merged without automated test execution. Regressions, including security regressions, can reach the main branch undetected.
 
 **Evidence:**
+
 - `.gitlab-ci.yml:5` -- "NOTE: Build/test skipped - requires Zig 0.15.x which is not yet released."
 - `.gitlab-ci.yml:37-40` -- Only stages: security, sbom, release
 
 **Fix Guidance:** Add a `build` stage running `zig build test` with a Zig 0.15+ container image.
 
 **Acceptance Criteria:**
+
 - [ ] CI pipeline includes a job running `zig build test`
 - [ ] Pipeline fails on test failure
 - [ ] Stale Zig version comment is removed
@@ -801,6 +851,7 @@ paths = [
 **Likelihood:** Requires a specific response pattern. Low in practice.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:177`
 
 ```zig
@@ -812,6 +863,7 @@ if (std.mem.indexOf(u8, status_line, " 2")) |_| {
 **Fix Guidance:** Parse the HTTP/1.1 status line properly: check that bytes 9-12 of the response are a 3-digit code starting with `2`.
 
 **Acceptance Criteria:**
+
 - [ ] Status code is parsed from the correct position in the HTTP response line
 - [ ] Only actual 2xx codes are treated as success
 
@@ -835,6 +887,7 @@ if (std.mem.indexOf(u8, status_line, " 2")) |_| {
 **Likelihood:** Requires user-controlled message content reaching the journald handler. Scored at 3 because it is the same vector as SEC-0006 in a different handler.
 
 **Evidence:**
+
 - `src/handlers/journald.zig:140-150` -- direct write of rec.message and attr values to stderr
 
 ```zig
@@ -852,6 +905,7 @@ for (rec.attrs) |attr| {
 **Fix Guidance:** Apply the same message sanitization as recommended in SEC-0006 to the journald fallback path.
 
 **Acceptance Criteria:**
+
 - [ ] Journald stderr fallback sanitizes message and attribute values
 - [ ] Newlines and control characters are escaped
 
@@ -877,6 +931,7 @@ for (rec.attrs) |attr| {
 **Likelihood:** Requires user-controlled message content reaching the windows_eventlog handler. Scored at 2 because the windows_eventlog handler is platform-specific and the stderr fallback is a secondary output path.
 
 **Evidence:**
+
 - `src/handlers/windows_eventlog.zig:136` -- message written directly to stderr without sanitization
 
 ```zig
@@ -894,10 +949,12 @@ sanitize.sanitizeOutput(stderr_writer, rec.message) catch {};
 ```
 
 **Fix Guidance:**
+
 1. Apply `sanitize.sanitizeOutput()` to the message parameter in the stderr fallback, consistent with the journald fix.
 2. Use a buffered approach (like journald.zig:143-162) to reduce syscalls and ensure atomic writes.
 
 **Acceptance Criteria:**
+
 - [ ] `windows_eventlog.zig` stderr fallback applies `sanitize.sanitizeOutput()` to message content
 - [ ] Control characters (0x00-0x1F) are escaped in stderr fallback output
 - [ ] Approach is consistent with the journald fallback fix (SEC-0019)
@@ -923,6 +980,7 @@ sanitize.sanitizeOutput(stderr_writer, rec.message) catch {};
 **Likelihood:** Low. Requires attacker-controlled attribute keys reaching the journald handler's stderr fallback. Scored at 2.
 
 **Evidence:**
+
 - `src/handlers/journald.zig:153` -- `stderr_writer.print(" {s}=", .{attr.key})` (NO sanitizeKey)
 - `src/handlers/journald.zig:118` -- native path correctly uses `sanitize.sanitizeKey(&key_buf, attr.key)`
 
@@ -935,6 +993,7 @@ for (rec.attrs) |attr| {
 **Fix Guidance:** Apply `sanitize.sanitizeKey()` to attribute keys in the stderr fallback, consistent with the native journald path.
 
 **Acceptance Criteria:**
+
 - [ ] `journald.zig` stderr fallback applies `sanitize.sanitizeKey()` to attribute keys
 - [ ] Consistent with native journald path (line 118)
 
@@ -958,6 +1017,7 @@ for (rec.attrs) |attr| {
 **Likelihood:** Low. Requires attacker-controlled attribute keys. Scored at 2.
 
 **Evidence:**
+
 - `src/handlers/windows_eventlog.zig:111` -- `writer.print(" {s}=", .{attr.key})` (NO sanitizeKey)
 
 ```zig
@@ -969,6 +1029,7 @@ for (rec.attrs) |attr| {
 **Fix Guidance:** Apply `sanitize.sanitizeKey()` to attribute keys, consistent with text_handler.zig (line 103) and syslog_rfc5424.zig (line 220).
 
 **Acceptance Criteria:**
+
 - [ ] `windows_eventlog.zig` applies `sanitize.sanitizeKey()` to attribute keys
 
 **SLA:** 180 days (2026-09-21)
@@ -991,6 +1052,7 @@ for (rec.attrs) |attr| {
 **Likelihood:** Very low. Requires attacker-controlled data in a syslog structured-data parameter value, AND a vulnerable downstream parser. Scored at 1.
 
 **Evidence:**
+
 - `src/handlers/syslog_rfc5424.zig:268-277`
 
 ```zig
@@ -1012,6 +1074,7 @@ fn writeSDString(writer: anytype, s: []const u8) !void {
 **What would confirm:** Testing with a syslog receiver that fails to parse messages containing control characters in SD-PARAM-VALUE.
 
 **Acceptance Criteria:**
+
 - [ ] `writeSDString()` escapes or replaces control characters (0x00-0x1F except TAB)
 
 **SLA:** 180 days (2026-09-21)
@@ -1034,6 +1097,7 @@ fn writeSDString(writer: anytype, s: []const u8) !void {
 **Likelihood:** Very low. Only relevant if these specific files are modified to include patterns matching gitleaks rules. Scored at 1.
 
 **Evidence:**
+
 - `.gitleaks.toml:8-11` -- allowlist only covers `secret_redaction.zig`
 
 ```toml
@@ -1046,6 +1110,7 @@ paths = [
 **Fix Guidance:** If `examples/json_logging.zig` or `tests/accept.zig` trigger false positives, add specific path entries to the allowlist. Otherwise, no action needed.
 
 **Acceptance Criteria:**
+
 - [ ] Gitleaks CI passes without false positives on all example and test files
 - [ ] Any new allowlist entries are file-specific (not directory-wide)
 
@@ -1070,6 +1135,7 @@ paths = [
 **Likelihood:** Low-medium. Requires attribute keys to contain control characters, which is uncommon but possible when keys are derived from external input. Scored at 2.
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig:212` -- `const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);`
 - `src/sinks/udp_sink.zig:131` -- `const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);`
 - `src/sinks/http_sink.zig:238` -- `const sanitized_key = sanitize.sanitizeKey(&key_buf, attr.key);`
@@ -1077,6 +1143,7 @@ paths = [
 **Fix:** Added `sanitize` import and `sanitize.sanitizeKey()` call in all three network sinks' attribute iteration loops, consistent with all other handlers.
 
 **Acceptance Criteria:**
+
 - [x] TCP sink applies sanitizeKey to attribute keys before JSON serialization
 - [x] UDP sink applies sanitizeKey to attribute keys before JSON serialization
 - [x] HTTP sink applies sanitizeKey to attribute keys before JSON serialization
@@ -1102,6 +1169,7 @@ paths = [
 **Likelihood:** Trivially exploitable by any network observer. No authentication or special access required. The HTTP sink now makes the limitation explicit (rejects https://), but TCP and UDP offer no encryption option at all. Scored at 4 because exploitation requires network position, which is common in cloud/shared environments.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:66-69` -- HTTPS URLs explicitly rejected after SEC-0001 fix
 
 ```zig
@@ -1136,12 +1204,14 @@ const sock = std.posix.socket(
 **Attack Scenario:** An application sends log data to a remote aggregator via the TCP or HTTP sink. An attacker on the same network segment (or any intermediate network hop) captures all log data in plaintext using passive packet capture. In cloud environments with shared networking, this is particularly concerning.
 
 **Fix Guidance:**
+
 1. For TCP sink: add optional TLS wrapper using `std.crypto.tls.Client` or an imported TLS library. Add `tls: bool = false` and `tls_ca_bundle: ?[]const u8 = null` fields to `TcpOptions`.
 2. For HTTP sink: implement TLS to allow `https://` URLs. This is the most impactful fix since HTTP is the most common log shipping protocol.
 3. For UDP sink: document that UDP is inherently unsuitable for encrypted transport. Recommend TCP+TLS or HTTP+TLS instead.
 4. At minimum, add prominent documentation warnings about plaintext transmission to all three sink modules.
 
 **Acceptance Criteria:**
+
 - [ ] At least one network sink supports TLS (TCP or HTTP recommended)
 - [ ] Documentation clearly states plaintext risk for all three sinks
 - [ ] UDP sink documentation recommends TCP+TLS or HTTP+TLS for sensitive data
@@ -1168,6 +1238,7 @@ const sock = std.posix.socket(
 **Likelihood:** Moderate. Developers are more likely to put sensitive data in structured attributes (which are redacted) than in message strings, but it does happen, especially in error paths and debug logging. Scored at 3.
 
 **Evidence:**
+
 - `src/handlers/text_handler.zig:73` -- message written with sanitizeOutput (control chars only, no secret scanning)
 
 ```zig
@@ -1181,11 +1252,13 @@ sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 **Attack Scenario:** A developer writes `log.err("Auth failed: token={s}", .{user_token})` using format strings. The token value is interpolated into the message string before the logger sees it. The logger writes it as a plain message. The `isSensitiveKey` mechanism never examines message content, so the token is logged in plaintext to all outputs.
 
 **Fix Guidance:**
+
 1. **Option A (recommended):** Document this as a known limitation prominently in the API docs and SECURITY.md. Add a "Security Best Practices" section recommending `Attr.secret()` or `Attr.string()` with sensitive keys for all secret values.
 2. **Option B (defense-in-depth):** Add an optional message scanning feature that searches for common secret patterns (e.g., regex for `password=...`, `token=...`, Bearer tokens, API key formats) in message strings. This would be opt-in due to performance overhead.
 3. Add a linter rule or compile-time check that warns when format strings contain known sensitive parameter names.
 
 **Acceptance Criteria:**
+
 - [ ] Documentation clearly states that message body content is NOT scanned for secrets
 - [ ] API docs recommend using `Attr.secret()` for all sensitive values
 - [ ] SECURITY.md updated to note this limitation
@@ -1212,6 +1285,7 @@ sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 **Likelihood:** Requires network-level attack (DNS poisoning, ARP spoofing, BGP hijacking). More practical in cloud environments or shared networks. Scored at 3.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:66-69` -- HTTPS rejected, only plain HTTP supported
 
 ```zig
@@ -1225,12 +1299,14 @@ if (std.mem.startsWith(u8, url, "https://")) {
 - No certificate store, no hostname verification, no pinning
 
 **Fix Guidance:**
+
 1. This finding is blocked by SEC-0026 (TLS implementation). Once TLS is available:
 2. Validate server certificates against system CA store.
 3. Verify the server hostname matches the certificate's Subject Alternative Name.
 4. Consider optional certificate pinning for high-security deployments.
 
 **Acceptance Criteria:**
+
 - [ ] When TLS is implemented, server certificates are validated against CA store
 - [ ] Hostname verification is performed
 - [ ] Connection fails on certificate mismatch
@@ -1257,6 +1333,7 @@ if (std.mem.startsWith(u8, url, "https://")) {
 **Likelihood:** Requires network-level attack or misconfiguration. Common risk in multi-tenant environments. Scored at 3.
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig:27-34` -- no authentication fields in TcpOptions
 
 ```zig
@@ -1274,11 +1351,13 @@ pub const TcpOptions = struct {
 **Related:** SEC-0016 (Won't Do) -- covers both TCP and UDP. This finding specifically tracks the TCP authentication gap for when TLS is implemented.
 
 **Fix Guidance:**
+
 1. When TLS is added (SEC-0026), include mTLS support with client certificate authentication.
 2. Add optional `auth_token: ?[]const u8 = null` field to TcpOptions for token-based authentication.
 3. Document that unauthenticated TCP transport should only be used on trusted networks.
 
 **Acceptance Criteria:**
+
 - [ ] TCP sink supports optional authentication (mTLS or token-based)
 - [ ] Documentation states the authentication limitation
 
@@ -1302,6 +1381,7 @@ pub const TcpOptions = struct {
 **Likelihood:** Low. Requires an application to log attributes with specific missing key names (e.g., `Attr.string("ssn", value)`). Scored at 2.
 
 **Evidence:**
+
 - `src/util/redact.zig:15-31` -- current sensitive_keys list
 
 ```zig
@@ -1317,11 +1397,13 @@ pub const sensitive_keys = [_][]const u8{
 ```
 
 **Fix Guidance:**
+
 1. Add the following patterns to `sensitive_keys`: `ssn`, `social_security`, `credit_card`, `card_number`, `cvv`, `cvc`, `session_id`, `cookie`, `bearer`, `jwt`, `connection_string`, `conn_str`, `database_url`, `db_password`, `pin`, `otp`.
 2. Consider making the sensitive key list configurable (user-extensible) rather than hardcoded.
 3. The comptime-unrolled pattern matching in `isSensitiveKey()` handles additional patterns efficiently, so performance impact is minimal.
 
 **Acceptance Criteria:**
+
 - [ ] `isSensitiveKey("ssn")` returns true
 - [ ] `isSensitiveKey("credit_card")` returns true
 - [ ] `isSensitiveKey("session_id")` returns true
@@ -1349,6 +1431,7 @@ pub const sensitive_keys = [_][]const u8{
 **Likelihood:** Low. Requires attacker control over the logger name string, which is uncommon. Scored at 2.
 
 **Evidence:**
+
 - `src/handlers/text_handler.zig:67-69` -- logger name written without sanitization
 
 ```zig
@@ -1369,11 +1452,13 @@ sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 - `src/record.zig:29` -- `source_file: []const u8` field exists but is not sanitized in any handler
 
 **Fix Guidance:**
+
 1. Replace `writer.writeAll(rec.logger)` with `sanitize.sanitizeOutput(writer, rec.logger)` in text_handler.zig.
 2. Apply the same fix to any other handlers that write `rec.logger` directly.
 3. If `rec.source_file` is ever written to output, apply `sanitizeOutput()` to it as well.
 
 **Acceptance Criteria:**
+
 - [ ] `rec.logger` is sanitized via `sanitizeOutput()` in text handler
 - [ ] Logger name containing `\n` produces escaped output, not a new log line
 - [ ] Same fix applied to any other handlers that write `rec.logger` directly
@@ -1398,6 +1483,7 @@ sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 **Likelihood:** Low. Requires attacker control of the hostname configuration value. Scored at 2.
 
 **Evidence:**
+
 - `src/handlers/syslog_rfc5424.zig:136` -- hostname written raw
 
 ```zig
@@ -1427,10 +1513,12 @@ fn writeSyslogName(writer: anytype, name: []const u8) !void {
 ```
 
 **Fix Guidance:**
+
 1. Apply `writeSyslogName()` to the hostname field at line 136, or
 2. Validate the hostname at `Context.init()` time (reject hostnames with control characters or exceeding RFC5424 limits).
 
 **Acceptance Criteria:**
+
 - [ ] Hostname is either sanitized via `writeSyslogName()` or validated at init time
 - [ ] Hostname containing control characters does not corrupt syslog message framing
 
@@ -1454,6 +1542,7 @@ fn writeSyslogName(writer: anytype, name: []const u8) !void {
 **Likelihood:** Requires concurrent `setLevel()` and `handle()` calls. Dynamic level changes are typically infrequent. Scored at 2.
 
 **Evidence:**
+
 - `src/handlers/text_handler.zig:149-151` -- setLevel writes ctx.level without mutex
 
 ```zig
@@ -1472,10 +1561,12 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
 - All handlers read `ctx.level` in `handle()` under mutex, but `setLevel()` writes without mutex
 
 **Fix Guidance:**
+
 1. Use `@atomicStore` / `@atomicLoad` for `ctx.level` in all handlers, consistent with the SEC-0011 fix for `fatal_hook`.
 2. Alternatively, acquire the handler's existing mutex in `setLevel()` before writing.
 
 **Acceptance Criteria:**
+
 - [ ] `setLevel()` uses atomic write or acquires mutex in all handlers
 - [ ] Concurrent `setLevel()` + `handle()` does not constitute a data race
 
@@ -1499,6 +1590,7 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
 **Likelihood:** Requires a permissive umask setting, which is uncommon in production but possible. Scored at 2.
 
 **Evidence:**
+
 - `src/handlers/rotating_file.zig:114-116` -- createFile with no explicit mode
 
 ```zig
@@ -1509,11 +1601,13 @@ self.file = std.fs.cwd().createFile(path, .{
 ```
 
 **Fix Guidance:**
+
 1. Pass explicit file mode to `createFile`: `.mode = 0o600` (owner read/write only).
 2. Consider making the file mode configurable via `RotationOptions`.
 3. Document the default file permissions in the rotating file handler's documentation.
 
 **Acceptance Criteria:**
+
 - [ ] Log files are created with explicit permissions (0o600 recommended)
 - [ ] File permissions do not depend on umask
 - [ ] Optionally configurable via `RotationOptions`
@@ -1538,6 +1632,7 @@ self.file = std.fs.cwd().createFile(path, .{
 **Likelihood:** Low. Requires a log record that serializes to more than `max_packet_size` bytes. Scored at 2.
 
 **Evidence:**
+
 - `src/sinks/udp_sink.zig:80` -- truncation at arbitrary byte boundary
 
 ```zig
@@ -1546,6 +1641,7 @@ const send_len = @min(data.len, self.options.max_packet_size);
 ```
 
 **Fix Guidance:**
+
 1. Before sending, check if `data.len > max_packet_size`. If so, either:
    a. Drop the record and increment an error counter (preferred for audit integrity), or
    b. Truncate the message field to fit within the limit while preserving valid JSON structure, or
@@ -1553,6 +1649,7 @@ const send_len = @min(data.len, self.options.max_packet_size);
 2. Log a warning via stderr or metrics when truncation occurs.
 
 **Acceptance Criteria:**
+
 - [ ] UDP sink never sends malformed JSON
 - [ ] Oversized records are either dropped with a metric or truncated with valid JSON structure
 - [ ] Truncation events are observable via metrics
@@ -1577,6 +1674,7 @@ const send_len = @min(data.len, self.options.max_packet_size);
 **Likelihood:** Low. Requires either (a) two attributes with names that sanitize to the same string, or (b) two attributes with identical keys. Scored at 2.
 
 **Evidence:**
+
 - `src/util/sanitize.zig:17-27` -- sanitizeKey replaces all non-alphanumeric chars with `_`
 
 ```zig
@@ -1595,11 +1693,13 @@ for (key[0..len], 0..) |c, i| {
 **What would confirm:** Create two attributes `Attr.string("user/id", "a")` and `Attr.string("user@id", "b")`, serialize to JSON, and verify the output contains duplicate `"user_id"` keys.
 
 **Fix Guidance:**
+
 1. **Option A:** Track emitted keys in a small set during serialization. If a collision is detected, append a numeric suffix (e.g., `user_id_2`).
 2. **Option B:** Use a different sanitization strategy that preserves more of the original key structure (e.g., hex-encode invalid characters instead of replacing with `_`).
 3. **Option C:** Document the collision possibility as a known limitation.
 
 **Acceptance Criteria:**
+
 - [ ] Either: duplicate JSON keys are prevented, or the limitation is documented
 - [ ] If deduplication is implemented, all colliding keys are distinguishable in output
 
@@ -1623,10 +1723,12 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 **Resolution:** API.md convenience function signatures updated to match current `*Context` out-parameter API. All code examples corrected to compile with current slogz.zig.
 
 **Evidence:**
+
 - `docs/API.md` -- updated signatures for `stderrHandler(ctx: *text.Context, level: Level) Handler`
 - Old `struct { ctx, handler }` return pattern removed from all examples
 
 **Acceptance Criteria:**
+
 - [x] docs/API.md examples compile with current slogz.zig
 - [x] `stderrHandler` and `stderrJsonHandler` signatures in API.md match `src/slogz.zig`
 - [x] No references to the old `struct { ctx, handler }` return pattern remain in API.md
@@ -1645,9 +1747,11 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 **Resolution:** ARCHITECTURE.md module tree updated to list all source files including multi_handler.zig, parallel.zig, json_value.zig, text_value.zig, json_record.zig, and text_record.zig.
 
 **Evidence:**
+
 - `docs/ARCHITECTURE.md` -- module tree now lists all .zig files in the codebase
 
 **Acceptance Criteria:**
+
 - [x] ARCHITECTURE.md module tree lists all .zig files
 - [x] `multi_handler.zig`, `parallel.zig`, `json_value.zig`, `text_value.zig` are all present in the tree
 
@@ -1665,6 +1769,7 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 **Reason:** Requires manual GitLab issue close; cannot automate without issue access. Marked Won't Do for this gap closure pass. The GitLab issue should be closed manually by the maintainer.
 
 **Acceptance Criteria:**
+
 - [ ] GitLab #40 status matches PERF_GAP_ANALYSIS.md disposition (both closed/won't-do, or both open)
 
 ---
@@ -1672,10 +1777,12 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 ## Findings by Area
 
 ### Authentication and Authorization
+
 - SEC-0016: No authentication for TCP/UDP sinks (Medium) -- Won't Do
 - SEC-0029: TCP sink has no authentication mechanism (Medium) -- **Won't Do** (pass 5)
 
 ### Web / API / Network
+
 - SEC-0001: HTTPS plaintext transmission (Critical) -- Closed
 - SEC-0003: HTTP header injection (High) -- Closed
 - SEC-0004: TCP/UDP plaintext transmission (High) -- Won't Do
@@ -1686,6 +1793,7 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 - SEC-0035: UDP truncation produces malformed JSON (Low) -- **Closed** (pass 5)
 
 ### Input Validation / Injection
+
 - SEC-0006: Log injection via unsanitized messages (High) -- Closed (pass 3)
 - SEC-0007: Path traversal in rotating file (High) -- Closed
 - SEC-0010: Text handler unescaped string values (Medium) -- Closed
@@ -1699,6 +1807,7 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 - SEC-0036: JSON key collision via duplicate or sanitize-colliding keys (Low) -- **Closed** (pass 5)
 
 ### Sensitive Data Handling
+
 - SEC-0005: isSensitiveKey() dead code (High) -- Closed
 - SEC-0009: Rotating file missing isSensitiveKey() auto-redaction (High) -- Closed (pass 3)
 - SEC-0012: Secret values plaintext in memory (Medium) -- Closed
@@ -1709,21 +1818,26 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 - SEC-0030: Sensitive key list incomplete (Low) -- **Closed** (pass 5)
 
 ### Memory Safety / Concurrency
+
 - SEC-0002: Dangling pointer in stderrHandler (Critical) -- Closed
 - SEC-0011: Global fatal_hook race condition (Medium) -- Closed
 - SEC-0033: Data race on Level field in setLevel across handlers (Low) -- **Closed** (pass 5)
 
 ### File System
+
 - SEC-0034: Log file created with default permissions (Low) -- **Closed** (pass 5)
 
 ### Supply Chain
+
 - SEC-0008: spice on floating main branch (High) -- Blocked
 
 ### Operations / CI-CD
+
 - SEC-0015: SECURITY.md false claims (Medium) -- Closed
 - SEC-0017: No CI build/test pipeline (Medium) -- Closed
 
 ### Documentation / Tracking (Phase 3 Audit)
+
 - GAP-0026: API.md documents stale convenience function signatures (Medium) -- **Closed** (pass 5)
 - GAP-0027: ARCHITECTURE.md module tree missing 4 source files (Low) -- **Closed** (pass 5)
 - GAP-0028: GitLab issue #40 open but PERF-025 marked Won't Do (Low) -- **Won't Do** (pass 5)
@@ -1844,3 +1958,53 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 | GAP-0026 | (new) | API.md stale convenience function signatures -- phase 3 audit |
 | GAP-0027 | (new) | ARCHITECTURE.md module tree missing 4 files -- phase 3 audit |
 | GAP-0028 | (new) | GitLab #40 / PERF-025 status mismatch -- phase 3 audit |
+
+---
+
+## Parallelism & Spice Integration Gap Analysis
+
+**Added:** 2026-03-30
+**Last updated:** 2026-03-30 (gap closure pass)
+**Analyst:** Claude Opus 4.6 (manual review + automated closure)
+
+### Executive Summary
+
+The `spice` dependency is correctly declared in `build.zig.zon` and was wired into `build.zig` as a separate `parallel` module. However, the parallel module was effectively dead code -- none of its functions were called by any handler, sink, or logger.
+
+**Gap closure pass (2026-03-30):** Restructured `parallel.zig` into the `slogz` module (eliminating the separate module that caused Zig 0.15 cross-module file ownership conflicts). Added Handler-native `dispatchHandlers()` and `flushHandlers()` functions. Wired `multi_handler` to use parallel dispatch for both `handle()` and `flush()`. Added `slogz.deinit()` for pool lifecycle, `initPool()` for configurable allocator, and re-exported `parallel` from `slogz.zig`. All tests pass.
+
+### Parallelism Findings
+
+| Rank | ID | Severity | Finding | Component | Evidence | Fix | Status |
+|------|---------|----------|---------|-----------|----------|-----|--------|
+| 1 | PAR-0001 | High | `parallel.zig` functions are dead code -- never called outside own tests | parallel.zig, all handlers | `grep` for `parallelRecordFormat` etc. found zero call sites | Added `dispatchHandlers()` and `flushHandlers()` Handler-native functions; wired into multi_handler | **Closed** |
+| 2 | PAR-0002 | High | `multi_handler.zig` dispatches to N handlers sequentially in a `for` loop | multi_handler.zig | Sequential `for` loop in `handle()` | Replaced with `parallel.dispatchHandlers()` call with stack-allocated results | **Closed** |
+| 3 | PAR-0003 | High | `multi_handler.zig` flushes N handlers sequentially | multi_handler.zig | Sequential `for` loop in `flush()` | Replaced with `parallel.flushHandlers()` call with stack-allocated results | **Closed** |
+| 4 | PAR-0004 | Medium | `async_handler.zig` spawns raw `std.Thread` instead of spice worker | async_handler.zig:59,80 | `std.Thread.spawn(.{}, workerThread, .{self})` | Dedicated worker thread is the correct pattern for a persistent queue consumer | **Won't Do** |
+| 5 | PAR-0005 | Medium | Unit test target missing `parallel` module import | build.zig | Unit tests had no `spice` import | Restructured: parallel.zig is now part of slogz module; added `spice` import to unit test target | **Closed** |
+| 6 | PAR-0006 | Medium | Global spice pool never cleaned up -- no `deinitPool()` call path | parallel.zig | `deinitPool()` defined but never called | Added `slogz.deinit()` which calls `parallel.deinitPool()` | **Closed** |
+| 7 | PAR-0007 | Low | `parallel.zig` `HandlerTarget` uses `*anyopaque` -- not wired to actual `Handler` type | parallel.zig | `HandlerTarget` incompatible with `handler.zig:Handler` | Added new `dispatchHandlers()` / `flushHandlers()` that work directly with `Handler` type | **Closed** |
+| 8 | PAR-0008 | Low | TCP/HTTP sink retry backoff uses blocking `std.Thread.sleep` | tcp_sink.zig, http_sink.zig | `std.Thread.sleep(...)` in retry loops | Blocking sleep is appropriate for network retry backoff -- not a spice concern | **Won't Do** |
+| 9 | PAR-0009 | Low | `parallel.zig` not re-exported from `slogz.zig` | slogz.zig | No `pub const parallel` line | Added `pub const parallel = @import("parallel.zig")` to slogz.zig | **Closed** |
+| 10 | PAR-0010 | Info | `parallel.zig` tests skip entirely when spice disabled | parallel.zig | `if (!build_options.enable_spice) return error.SkipZigTest;` | Added Handler-native tests that run regardless of spice (test sequential path) | **Closed** |
+| 11 | PAR-0011 | Medium | `getPool()` uses page_allocator for spice ThreadPool -- no lifecycle control | parallel.zig | Hardcoded `page_allocator` | Added `initPool(allocator, config)` for explicit initialization with custom allocator | **Closed** |
+| 12 | PAR-0012 | Low | `multi_handler.zig` close() is sequential -- could parallelize handler close | multi_handler.zig:89-92 | Sequential `for` loop in `close()` | One-time shutdown cost; not worth the complexity | **Won't Do** |
+
+### Closure Summary
+
+| Status | Count |
+|--------|-------|
+| Closed | 9 |
+| Won't Do | 3 |
+| Open | 0 |
+| **Total** | **12** |
+
+### Key Implementation Decisions
+
+1. **Module restructuring:** `parallel.zig` was moved from a separate Zig module into the `slogz` module (via relative import). This was required because Zig 0.15 enforces that a file can only belong to one module, and `parallel.zig` needed to import `handler.zig` and `record.zig` (which belong to slogz).
+
+2. **Handler-native parallel API:** Rather than adapting the existing `HandlerTarget`/`parallelHandlerDispatch` (which operates on pre-formatted `[]const u8`), new `dispatchHandlers()` and `flushHandlers()` functions were added that work directly with `Handler` + `*const Record`. The original byte-oriented functions remain for future sink-level parallelism.
+
+3. **async_handler Won't Do:** The dedicated worker thread pattern in `async_handler` is architecturally correct for a persistent queue consumer. Spice's fork/join model is designed for CPU-bound work decomposition, not long-running I/O loops.
+
+4. **Blocking retry Won't Do:** `std.Thread.sleep` in TCP/HTTP retry backoff is the standard pattern. These retries happen on the caller's thread within a mutex-protected section -- moving to spice would add complexity without benefit.

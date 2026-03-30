@@ -92,6 +92,9 @@ pub const journald = @import("handlers/journald.zig");
 pub const windows_eventlog = @import("handlers/windows_eventlog.zig");
 pub const multi_handler = @import("handlers/multi_handler.zig");
 
+// Parallelism
+pub const parallel = @import("parallel.zig");
+
 // Network sinks
 pub const tcp_sink = @import("sinks/tcp_sink.zig");
 pub const udp_sink = @import("sinks/udp_sink.zig");
@@ -166,6 +169,13 @@ pub fn getMetrics() struct { bytes_written: u64, records_emitted: u64 } {
 /// Export metrics in Prometheus format.
 pub fn exportPrometheusMetrics(buf: []u8) []const u8 {
     return metrics.global.renderPrometheus(buf);
+}
+
+/// Shut down the slogz library, releasing the global spice thread pool
+/// (if enabled and initialized). Call this during application shutdown
+/// after all loggers and handlers have been closed.
+pub fn deinit() void {
+    parallel.deinitPool();
 }
 
 test "slogz basic usage" {

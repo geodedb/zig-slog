@@ -3,7 +3,7 @@
 
 .PHONY: all build test test-unit clean check fmt dev ci install help
 .PHONY: test-debug test-release-safe test-release-fast test-release-small test-all-optimizations
-.PHONY: run
+.PHONY: run bench scale-bench bench-save bench-baseline bench-compare
 
 # Default target
 all: build test
@@ -45,6 +45,33 @@ ci: fmt-check build test
 # Run the example application
 run:
 	zig build run
+
+# =============================================================================
+# Benchmark targets
+# =============================================================================
+
+# Quick microbenchmarks
+bench:
+	zig build bench
+
+# Incremental scale benchmark (JSON to stdout, summary to stderr)
+scale-bench:
+	@zig build scale-bench 2>/dev/null
+
+# Run scale bench and save results to benchmarks/results/<commit-sha>.json
+bench-save:
+	@zig build scale-bench 2>/dev/null > benchmarks/results/$$(git rev-parse --short HEAD).json
+	@echo "Saved to benchmarks/results/$$(git rev-parse --short HEAD).json"
+
+# Save current results as the baseline
+bench-baseline:
+	@zig build scale-bench 2>/dev/null > benchmarks/results/baseline.json
+	@echo "Saved baseline to benchmarks/results/baseline.json"
+
+# Compare current results against baseline
+bench-compare:
+	@zig build scale-bench 2>/dev/null > /tmp/slogz-current-bench.json
+	@zig build compare-bench -- benchmarks/results/baseline.json /tmp/slogz-current-bench.json
 
 # =============================================================================
 # Optimization-specific test targets
@@ -127,6 +154,13 @@ help:
 	@echo "  dev                    Format, check, and test"
 	@echo "  ci                     Full CI pipeline"
 	@echo "  run                    Run example application"
+	@echo ""
+	@echo "Benchmarks:"
+	@echo "  bench                  Run quick microbenchmarks"
+	@echo "  scale-bench            Run incremental scale benchmark (JSON output)"
+	@echo "  bench-save             Run and save to results/<commit-sha>.json"
+	@echo "  bench-baseline         Run and save as baseline"
+	@echo "  bench-compare          Run and compare against baseline"
 	@echo ""
 	@echo "Optimization tests:"
 	@echo "  test-debug             Test with Debug optimization"

@@ -74,6 +74,25 @@ var global_pool: if (build_options.enable_spice) ?spice.ThreadPool else void = i
 var pool_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var pool_mutex: std.Thread.Mutex = .{};
 
+/// Explicitly initialize the global spice thread pool with a given allocator
+/// and configuration. If the pool is already initialized, this is a no-op.
+///
+/// Call this during application startup to control the allocator and thread
+/// count. If not called, `getPool()` will lazily initialize with
+/// `page_allocator` and default configuration.
+pub fn initPool(allocator: std.mem.Allocator, config: spice.ThreadPoolConfig) void {
+    if (!build_options.enable_spice) return;
+
+    pool_mutex.lock();
+    defer pool_mutex.unlock();
+
+    if (global_pool == null) {
+        global_pool = spice.ThreadPool.init(allocator);
+        global_pool.?.start(config);
+        pool_initialized.store(true, .release);
+    }
+}
+
 pub fn getPool() if (build_options.enable_spice) *spice.ThreadPool else void {
     if (!build_options.enable_spice) return;
 
@@ -489,6 +508,180 @@ fn parallelBatchFlushTask(t: *spice.Task, ctx: BatchFlushContext) void {
 }
 
 // ============================================================================
+// Parallel Multi-Handler Dispatch (Handler-native)
+// ============================================================================
+
+const Handler = @import("handler.zig").Handler;
+const HandlerError = @import("handler.zig").HandlerError;
+const Record = @import("record.zig").Record;
+
+/// Result of dispatching a record to a single handler.
+pub const MultiHandlerResult = struct {
+    err: ?HandlerError,
+};
+
+/// Context for parallel multi-handler dispatch.
+pub const MultiHandlerDispatchContext = struct {
+    handlers: []const Handler,
+    record: *const Record,
+    results: []MultiHandlerResult,
+};
+
+/// Dispatch a record to multiple Handler instances in parallel.
+///
+/// Each handler receives the same Record pointer. Results are collected
+/// per-handler so the caller can inspect individual errors.
+///
+/// Threshold: Uses parallel processing for 2+ handlers when spice is enabled.
+pub fn dispatchHandlers(
+    handlers: []const Handler,
+    record: *const Record,
+    results: []MultiHandlerResult,
+) void {
+    std.debug.assert(handlers.len == results.len);
+
+    if (!build_options.enable_spice or handlers.len < 2) {
+        for (handlers, 0..) |h, i| {
+            h.handle(record) catch |err| {
+                results[i] = .{ .err = err };
+                continue;
+            };
+            results[i] = .{ .err = null };
+        }
+        return;
+    }
+
+    const pool = getPool();
+    const ctx = MultiHandlerDispatchContext{
+        .handlers = handlers,
+        .record = record,
+        .results = results,
+    };
+    _ = pool.call(void, multiHandlerDispatchTask, ctx);
+}
+
+fn multiHandlerDispatchTask(t: *spice.Task, ctx: MultiHandlerDispatchContext) void {
+    const handlers = ctx.handlers;
+    const results = ctx.results;
+
+    if (handlers.len < 2) {
+        for (handlers, 0..) |h, i| {
+            h.handle(ctx.record) catch |err| {
+                results[i] = .{ .err = err };
+                continue;
+            };
+            results[i] = .{ .err = null };
+        }
+        return;
+    }
+
+    const mid = handlers.len / 2;
+    const left_ctx = MultiHandlerDispatchContext{
+        .handlers = handlers[0..mid],
+        .record = ctx.record,
+        .results = results[0..mid],
+    };
+    const right_ctx = MultiHandlerDispatchContext{
+        .handlers = handlers[mid..],
+        .record = ctx.record,
+        .results = results[mid..],
+    };
+
+    var fut = spice.Future(MultiHandlerDispatchContext, void).init();
+    fut.fork(t, multiHandlerDispatchTask, right_ctx);
+
+    t.call(void, multiHandlerDispatchTask, left_ctx);
+    if (fut.join(t) == null) {
+        t.call(void, multiHandlerDispatchTask, right_ctx);
+    }
+}
+
+// ============================================================================
+// Parallel Multi-Handler Flush (Handler-native)
+// ============================================================================
+
+/// Result of flushing a single handler.
+pub const MultiFlushResult = struct {
+    err: ?HandlerError,
+};
+
+/// Context for parallel multi-handler flush.
+pub const MultiFlushContext = struct {
+    handlers: []const Handler,
+    timeout_ms: u32,
+    results: []MultiFlushResult,
+};
+
+/// Flush multiple Handler instances in parallel.
+///
+/// Each handler is flushed independently. Results are collected
+/// per-handler so the caller can inspect individual errors.
+///
+/// Threshold: Uses parallel processing for 2+ handlers when spice is enabled.
+pub fn flushHandlers(
+    handlers: []const Handler,
+    timeout_ms: u32,
+    results: []MultiFlushResult,
+) void {
+    std.debug.assert(handlers.len == results.len);
+
+    if (!build_options.enable_spice or handlers.len < 2) {
+        for (handlers, 0..) |h, i| {
+            h.flush(timeout_ms) catch |err| {
+                results[i] = .{ .err = err };
+                continue;
+            };
+            results[i] = .{ .err = null };
+        }
+        return;
+    }
+
+    const pool = getPool();
+    const ctx = MultiFlushContext{
+        .handlers = handlers,
+        .timeout_ms = timeout_ms,
+        .results = results,
+    };
+    _ = pool.call(void, multiFlushTask, ctx);
+}
+
+fn multiFlushTask(t: *spice.Task, ctx: MultiFlushContext) void {
+    const handlers = ctx.handlers;
+    const results = ctx.results;
+
+    if (handlers.len < 2) {
+        for (handlers, 0..) |h, i| {
+            h.flush(ctx.timeout_ms) catch |err| {
+                results[i] = .{ .err = err };
+                continue;
+            };
+            results[i] = .{ .err = null };
+        }
+        return;
+    }
+
+    const mid = handlers.len / 2;
+    const left_ctx = MultiFlushContext{
+        .handlers = handlers[0..mid],
+        .timeout_ms = ctx.timeout_ms,
+        .results = results[0..mid],
+    };
+    const right_ctx = MultiFlushContext{
+        .handlers = handlers[mid..],
+        .timeout_ms = ctx.timeout_ms,
+        .results = results[mid..],
+    };
+
+    var fut = spice.Future(MultiFlushContext, void).init();
+    fut.fork(t, multiFlushTask, right_ctx);
+
+    t.call(void, multiFlushTask, left_ctx);
+    if (fut.join(t) == null) {
+        t.call(void, multiFlushTask, right_ctx);
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -771,4 +964,240 @@ test "parallel record format - below threshold" {
     for (results) |result| {
         try std.testing.expect(result.success);
     }
+}
+
+// ============================================================================
+// Handler-native dispatch / flush tests
+// ============================================================================
+
+const Level = @import("level.zig").Level;
+const Attr = @import("value.zig").Attr;
+
+/// A counting handler that records how many times handle() and flush() are called.
+const CountingHandler = struct {
+    handle_count: usize,
+    flush_count: usize,
+    fail_on_handle: bool,
+    fail_on_flush: bool,
+
+    fn init(fail_handle: bool, fail_flush: bool) CountingHandler {
+        return .{
+            .handle_count = 0,
+            .flush_count = 0,
+            .fail_on_handle = fail_handle,
+            .fail_on_flush = fail_flush,
+        };
+    }
+
+    fn handleFn(ctx_ptr: *anyopaque, _: *const Record) HandlerError!void {
+        const self: *CountingHandler = @ptrCast(@alignCast(ctx_ptr));
+        self.handle_count += 1;
+        if (self.fail_on_handle) return error.WriteFailed;
+    }
+
+    fn flushFn(ctx_ptr: *anyopaque, _: u32) HandlerError!void {
+        const self: *CountingHandler = @ptrCast(@alignCast(ctx_ptr));
+        self.flush_count += 1;
+        if (self.fail_on_flush) return error.FlushFailed;
+    }
+
+    fn withAttrsFn(ctx_ptr: *anyopaque, _: []const Attr) Handler {
+        return .{ .ctx = ctx_ptr, .vtable = &counting_vtable };
+    }
+
+    fn withGroupFn(ctx_ptr: *anyopaque, _: []const u8) Handler {
+        return .{ .ctx = ctx_ptr, .vtable = &counting_vtable };
+    }
+
+    fn setLevelFn(_: *anyopaque, _: Level) void {}
+
+    const counting_vtable = @import("handler.zig").HandlerVTable{
+        .handle = handleFn,
+        .withAttrs = withAttrsFn,
+        .withGroup = withGroupFn,
+        .setLevel = setLevelFn,
+        .flush = flushFn,
+    };
+
+    fn handler(self: *CountingHandler) Handler {
+        return .{ .ctx = @ptrCast(self), .vtable = &counting_vtable };
+    }
+};
+
+test "dispatchHandlers - all succeed" {
+    var h1 = CountingHandler.init(false, false);
+    var h2 = CountingHandler.init(false, false);
+    var h3 = CountingHandler.init(false, false);
+
+    const handlers = [_]Handler{ h1.handler(), h2.handler(), h3.handler() };
+    var results: [3]MultiHandlerResult = undefined;
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "dispatch test",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    dispatchHandlers(&handlers, &rec, &results);
+
+    for (results) |r| {
+        try std.testing.expect(r.err == null);
+    }
+    try std.testing.expectEqual(@as(usize, 1), h1.handle_count);
+    try std.testing.expectEqual(@as(usize, 1), h2.handle_count);
+    try std.testing.expectEqual(@as(usize, 1), h3.handle_count);
+}
+
+test "dispatchHandlers - partial failure" {
+    var h1 = CountingHandler.init(false, false);
+    var h2 = CountingHandler.init(true, false); // fails
+    var h3 = CountingHandler.init(false, false);
+
+    const handlers = [_]Handler{ h1.handler(), h2.handler(), h3.handler() };
+    var results: [3]MultiHandlerResult = undefined;
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "partial fail",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    dispatchHandlers(&handlers, &rec, &results);
+
+    try std.testing.expect(results[0].err == null);
+    try std.testing.expect(results[1].err != null);
+    try std.testing.expect(results[2].err == null);
+    // All handlers should still be called even if one fails
+    try std.testing.expectEqual(@as(usize, 1), h1.handle_count);
+    try std.testing.expectEqual(@as(usize, 1), h2.handle_count);
+    try std.testing.expectEqual(@as(usize, 1), h3.handle_count);
+}
+
+test "dispatchHandlers - single handler (below threshold)" {
+    var h1 = CountingHandler.init(false, false);
+
+    const handlers = [_]Handler{h1.handler()};
+    var results: [1]MultiHandlerResult = undefined;
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "single",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    dispatchHandlers(&handlers, &rec, &results);
+
+    try std.testing.expect(results[0].err == null);
+    try std.testing.expectEqual(@as(usize, 1), h1.handle_count);
+}
+
+test "flushHandlers - all succeed" {
+    var h1 = CountingHandler.init(false, false);
+    var h2 = CountingHandler.init(false, false);
+
+    const handlers = [_]Handler{ h1.handler(), h2.handler() };
+    var results: [2]MultiFlushResult = undefined;
+
+    flushHandlers(&handlers, 5000, &results);
+
+    for (results) |r| {
+        try std.testing.expect(r.err == null);
+    }
+    try std.testing.expectEqual(@as(usize, 1), h1.flush_count);
+    try std.testing.expectEqual(@as(usize, 1), h2.flush_count);
+}
+
+test "flushHandlers - partial failure" {
+    var h1 = CountingHandler.init(false, false);
+    var h2 = CountingHandler.init(false, true); // flush fails
+
+    const handlers = [_]Handler{ h1.handler(), h2.handler() };
+    var results: [2]MultiFlushResult = undefined;
+
+    flushHandlers(&handlers, 5000, &results);
+
+    try std.testing.expect(results[0].err == null);
+    try std.testing.expect(results[1].err != null);
+    try std.testing.expectEqual(@as(usize, 1), h1.flush_count);
+    try std.testing.expectEqual(@as(usize, 1), h2.flush_count);
+}
+
+test "dispatchHandlers - empty list" {
+    const handlers = [_]Handler{};
+    var results: [0]MultiHandlerResult = undefined;
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "empty",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    dispatchHandlers(&handlers, &rec, &results);
+    // No assertions needed -- just verifying no crash on empty input
+}
+
+test "flushHandlers - single handler (below threshold)" {
+    var h1 = CountingHandler.init(false, false);
+
+    const handlers = [_]Handler{h1.handler()};
+    var results: [1]MultiFlushResult = undefined;
+
+    flushHandlers(&handlers, 1000, &results);
+
+    try std.testing.expect(results[0].err == null);
+    try std.testing.expectEqual(@as(usize, 1), h1.flush_count);
+}
+
+test "flushHandlers - empty list" {
+    const handlers = [_]Handler{};
+    var results: [0]MultiFlushResult = undefined;
+
+    flushHandlers(&handlers, 1000, &results);
+}
+
+test "dispatchHandlers - all fail" {
+    var h1 = CountingHandler.init(true, false);
+    var h2 = CountingHandler.init(true, false);
+
+    const handlers = [_]Handler{ h1.handler(), h2.handler() };
+    var results: [2]MultiHandlerResult = undefined;
+
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "all fail",
+        .logger = "test",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{},
+    };
+
+    dispatchHandlers(&handlers, &rec, &results);
+
+    for (results) |r| {
+        try std.testing.expect(r.err != null);
+    }
+    try std.testing.expectEqual(@as(usize, 1), h1.handle_count);
+    try std.testing.expectEqual(@as(usize, 1), h2.handle_count);
 }

@@ -35,30 +35,19 @@ pub fn build(b: *std.Build) void {
     });
     const json_mod = json_dep.module("json");
 
-    // Parallel module
-    const parallel_mod = b.addModule("parallel", .{
-        .root_source_file = b.path("src/parallel.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "build_options", .module = build_options.createModule() },
-        },
-    });
-    if (spice_mod) |sm| {
-        parallel_mod.addImport("spice", sm);
-    }
-
-    // Main module
+    // Main module (parallel.zig is part of the slogz module via relative import)
     const slogz_mod = b.addModule("slogz", .{
         .root_source_file = b.path("src/slogz.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "json", .module = json_mod },
-            .{ .name = "parallel", .module = parallel_mod },
         },
     });
     slogz_mod.addOptions("build_options", build_options);
+    if (spice_mod) |sm| {
+        slogz_mod.addImport("spice", sm);
+    }
 
     // Link libsystemd if journald is enabled
     if (feature_journald) {
@@ -77,6 +66,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     unit_tests.root_module.addOptions("build_options", build_options);
+    if (spice_mod) |sm| {
+        unit_tests.root_module.addImport("spice", sm);
+    }
     if (feature_journald) {
         unit_tests.root_module.linkSystemLibrary("systemd", .{});
     }
@@ -193,6 +185,47 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run benchmarks");
     bench_step.dependOn(&run_bench.step);
 
+    // Scale benchmark executable (JSON output for regression tracking)
+    const scale_bench_exe = b.addExecutable(.{
+        .name = "scale-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/scale_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "slogz", .module = slogz_mod },
+            },
+        }),
+    });
+
+    b.installArtifact(scale_bench_exe);
+
+    const run_scale_bench = b.addRunArtifact(scale_bench_exe);
+    if (b.args) |args| {
+        run_scale_bench.addArgs(args);
+    }
+    const scale_bench_step = b.step("scale-bench", "Run incremental scale benchmarks (JSON output)");
+    scale_bench_step.dependOn(&run_scale_bench.step);
+
+    // Compare benchmark executable (regression detection)
+    const compare_bench_exe = b.addExecutable(.{
+        .name = "compare-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/compare.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+
+    b.installArtifact(compare_bench_exe);
+
+    const run_compare_bench = b.addRunArtifact(compare_bench_exe);
+    if (b.args) |args| {
+        run_compare_bench.addArgs(args);
+    }
+    const compare_bench_step = b.step("compare-bench", "Compare benchmark results for regressions");
+    compare_bench_step.dependOn(&run_compare_bench.step);
+
     // Format step
     const fmt_step = b.step("fmt", "Format source code");
     const fmt = b.addFmt(.{
@@ -218,6 +251,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     docs_lib.root_module.addOptions("build_options", build_options);
+    if (spice_mod) |sm| {
+        docs_lib.root_module.addImport("spice", sm);
+    }
     const install_docs = b.addInstallDirectory(.{
         .source_dir = docs_lib.getEmittedDocs(),
         .install_dir = .prefix,
