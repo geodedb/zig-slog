@@ -74,14 +74,14 @@ pub const SyslogOptions = struct {
 
 /// Syslog handler context.
 pub const Context = struct {
-    writer: std.Io.AnyWriter,
+    writer: *std.Io.Writer,
     level: std.atomic.Value(i32),
     clock: Clock,
     options: SyslogOptions,
     context_attrs: []const Attr,
     mutex: std.Thread.Mutex,
 
-    pub fn init(writer: std.Io.AnyWriter, level: Level, clock: Clock, options: SyslogOptions) Context {
+    pub fn init(writer: *std.Io.Writer, level: Level, clock: Clock, options: SyslogOptions) Context {
         return .{
             .writer = writer,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),

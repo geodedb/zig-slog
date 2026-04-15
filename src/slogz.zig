@@ -19,7 +19,7 @@
 //! const slogz = @import("slogz");
 //!
 //! var text_ctx = slogz.text.Context.init(
-//!     std.Io.getStdErr().writer().any(),
+//!     std.Io.File.stderr().writer().any(),
 //!     .info,
 //!     slogz.Clock.system(),
 //! );

@@ -19,14 +19,14 @@ const writeTextRecord = @import("../fmt/text_record.zig").writeTextRecord;
 
 /// Text handler context.
 pub const Context = struct {
-    writer: std.Io.AnyWriter,
+    writer: *std.Io.Writer,
     level: std.atomic.Value(i32),
     clock: Clock,
     prefix: []const u8,
     context_attrs: []const Attr,
     mutex: std.Thread.Mutex,
 
-    pub fn init(writer: std.Io.AnyWriter, level: Level, clock: Clock) Context {
+    pub fn init(writer: *std.Io.Writer, level: Level, clock: Clock) Context {
         return .{
             .writer = writer,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
@@ -100,7 +100,7 @@ pub fn init(ctx: *Context) Handler {
 }
 
 /// Create text handler with a writer.
-pub fn initWithWriter(writer: std.Io.AnyWriter, level: Level, clock: Clock) Context {
+pub fn initWithWriter(writer: *std.Io.Writer, level: Level, clock: Clock) Context {
     return Context.init(writer, level, clock);
 }
 

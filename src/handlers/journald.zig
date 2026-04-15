@@ -174,7 +174,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         }
     }
     stderr_writer.writeByte('\n') catch {};
-    const stderr = std.Io.getStdErr();
+    const stderr = std.Io.File.stderr();
     stderr.writeAll(stderr_stream.getWritten()) catch {};
 
     metrics.global.addBytesWritten(rec.message.len);
