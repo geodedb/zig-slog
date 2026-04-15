@@ -102,7 +102,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Format message with attributes
     var msg_buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&msg_buf);
+    var fbs = std.Io.fixedBufferStream(&msg_buf);
     const writer = fbs.writer();
 
     sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
@@ -138,7 +138,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Fallback: write sanitized output to stderr using a buffer to reduce syscalls
     var stderr_buf: [8192]u8 = undefined;
-    var stderr_stream = std.io.fixedBufferStream(&stderr_buf);
+    var stderr_stream = std.Io.fixedBufferStream(&stderr_buf);
     const stderr_writer = stderr_stream.writer();
     stderr_writer.writeByte('[') catch {};
     stderr_writer.writeAll(rec.level.asText()) catch {};

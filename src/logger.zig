@@ -387,7 +387,7 @@ test "fatal_hook uses atomic access" {
 test "Logger.with context attrs appear in output" {
     const text_handler = @import("handlers/text_handler.zig");
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = text_handler.Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = text_handler.init(&ctx);
@@ -421,7 +421,7 @@ test "Logger.with context attrs appear in output" {
 test "Logger.with context attrs appear in JSON output" {
     const json_handler = @import("handlers/json_handler.zig");
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = json_handler.Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = json_handler.init(&ctx);

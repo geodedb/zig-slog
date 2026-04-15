@@ -135,7 +135,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
             // Format value (auto-redact sensitive keys)
             var val_buf: [256]u8 = undefined;
-            var val_fbs = std.io.fixedBufferStream(&val_buf);
+            var val_fbs = std.Io.fixedBufferStream(&val_buf);
             const val_writer = val_fbs.writer();
             if (redact.isSensitiveKey(attr.key)) {
                 val_writer.writeAll(redact.REDACTED) catch continue;
@@ -154,7 +154,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Stderr fallback: write structured message using a buffer to reduce syscalls.
     var stderr_buf: [8192]u8 = undefined;
-    var stderr_stream = std.io.fixedBufferStream(&stderr_buf);
+    var stderr_stream = std.Io.fixedBufferStream(&stderr_buf);
     const stderr_writer = stderr_stream.writer();
     stderr_writer.print("<{d}>", .{priority}) catch {};
     if (ctx.syslog_identifier.len > 0) {
@@ -174,7 +174,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         }
     }
     stderr_writer.writeByte('\n') catch {};
-    const stderr = std.io.getStdErr();
+    const stderr = std.Io.getStdErr();
     stderr.writeAll(stderr_stream.getWritten()) catch {};
 
     metrics.global.addBytesWritten(rec.message.len);

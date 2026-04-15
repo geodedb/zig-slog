@@ -274,7 +274,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Format the record
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     writeTextRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
 

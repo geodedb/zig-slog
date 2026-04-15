@@ -269,7 +269,7 @@ test "AsyncHandler basic" {
     const allocator = std.testing.allocator;
 
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
     var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
@@ -307,7 +307,7 @@ test "AsyncHandler preserves attributes through queue" {
     const allocator = std.testing.allocator;
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
     var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
@@ -352,7 +352,7 @@ test "AsyncHandler preserves i64 values through queue" {
     const allocator = std.testing.allocator;
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
     var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
@@ -396,7 +396,7 @@ test "AsyncHandler redacts secrets in async output" {
     const allocator = std.testing.allocator;
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
     var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());

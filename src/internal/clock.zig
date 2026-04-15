@@ -62,7 +62,12 @@ pub fn setFixedTimestamp(timestamp_us: i128) void {
 }
 
 fn systemNowUtcMicros() i128 {
-    const ns = std.time.nanoTimestamp();
+    const ns = blk: {
+        var ts: std.os.linux.timespec = undefined;
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) break :blk @as(i128, 0);
+        break :blk @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+    };
     return @divFloor(ns, 1000);
 }
 

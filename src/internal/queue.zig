@@ -107,7 +107,7 @@ fn serializeValue(buf: *[MAX_VALUE_LEN]u8, val: Value) usize {
                 @memcpy(buf[0..null_str.len], null_str);
                 return null_str.len;
             }
-            var fbs = std.io.fixedBufferStream(buf);
+            var fbs = std.Io.fixedBufferStream(buf);
             fbs.writer().print("{d:.6}", .{f}) catch {
                 const fallback = "0.000000";
                 @memcpy(buf[0..fallback.len], fallback);

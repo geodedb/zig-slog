@@ -161,7 +161,7 @@ pub fn sanitizeOutput(writer: anytype, s: []const u8) !void {
 
 test "sanitizeOutput" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const writer = fbs.writer();
 
     // Normal text passes through

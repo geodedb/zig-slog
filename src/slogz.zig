@@ -19,7 +19,7 @@
 //! const slogz = @import("slogz");
 //!
 //! var text_ctx = slogz.text.Context.init(
-//!     std.io.getStdErr().writer().any(),
+//!     std.Io.getStdErr().writer().any(),
 //!     .info,
 //!     slogz.Clock.system(),
 //! );
@@ -180,7 +180,7 @@ pub fn deinit() void {
 
 test "slogz basic usage" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = text.Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = text.init(&ctx);
@@ -199,7 +199,7 @@ test "slogz basic usage" {
 
 test "slogz JSON handler" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = json.Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = json.init(&ctx);
@@ -226,7 +226,7 @@ test "slogz JSON handler" {
 
 test "slogz secret redaction" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = text.Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = text.init(&ctx);
@@ -254,7 +254,7 @@ test "slogz secret redaction" {
 
 test "slogz level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = text.Context.init(fbs.writer().any(), .warn, Clock.system());
     const handler = text.init(&ctx);

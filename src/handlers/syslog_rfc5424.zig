@@ -74,14 +74,14 @@ pub const SyslogOptions = struct {
 
 /// Syslog handler context.
 pub const Context = struct {
-    writer: std.io.AnyWriter,
+    writer: std.Io.AnyWriter,
     level: std.atomic.Value(i32),
     clock: Clock,
     options: SyslogOptions,
     context_attrs: []const Attr,
     mutex: std.Thread.Mutex,
 
-    pub fn init(writer: std.io.AnyWriter, level: Level, clock: Clock, options: SyslogOptions) Context {
+    pub fn init(writer: std.Io.AnyWriter, level: Level, clock: Clock, options: SyslogOptions) Context {
         return .{
             .writer = writer,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
@@ -119,7 +119,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     defer ctx.mutex.unlock();
 
     var buf: [16384]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const writer = fbs.writer();
 
     // PRI
@@ -325,7 +325,7 @@ pub fn init(ctx: *Context) Handler {
 
 test "SyslogHandler basic output" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system(), .{
         .facility = .local0,
@@ -364,7 +364,7 @@ test "SyslogHandler basic output" {
 
 test "SyslogHandler escaping" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system(), .{
         .hostname = "localhost",

@@ -171,7 +171,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Format record as JSON line OUTSIDE the mutex
     var buf: [16384]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     writeJsonRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
 

@@ -19,14 +19,14 @@ const writeTextRecord = @import("../fmt/text_record.zig").writeTextRecord;
 
 /// Text handler context.
 pub const Context = struct {
-    writer: std.io.AnyWriter,
+    writer: std.Io.AnyWriter,
     level: std.atomic.Value(i32),
     clock: Clock,
     prefix: []const u8,
     context_attrs: []const Attr,
     mutex: std.Thread.Mutex,
 
-    pub fn init(writer: std.io.AnyWriter, level: Level, clock: Clock) Context {
+    pub fn init(writer: std.Io.AnyWriter, level: Level, clock: Clock) Context {
         return .{
             .writer = writer,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
@@ -48,7 +48,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     defer ctx.mutex.unlock();
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     writeTextRecord(fbs.writer(), rec, ctx.prefix) catch return error.WriteFailed;
 
@@ -100,13 +100,13 @@ pub fn init(ctx: *Context) Handler {
 }
 
 /// Create text handler with a writer.
-pub fn initWithWriter(writer: std.io.AnyWriter, level: Level, clock: Clock) Context {
+pub fn initWithWriter(writer: std.Io.AnyWriter, level: Level, clock: Clock) Context {
     return Context.init(writer, level, clock);
 }
 
 test "TextHandler basic output" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);
@@ -136,7 +136,7 @@ test "TextHandler basic output" {
 
 test "TextHandler secret redaction" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);
@@ -163,7 +163,7 @@ test "TextHandler secret redaction" {
 
 test "TextHandler error attribute" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);
@@ -191,7 +191,7 @@ test "TextHandler error attribute" {
 
 test "TextHandler auto-redacts sensitive keys" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);
@@ -222,7 +222,7 @@ test "TextHandler auto-redacts sensitive keys" {
 
 test "TextHandler sanitizes message newlines" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);
@@ -254,7 +254,7 @@ test "TextHandler sanitizes message newlines" {
 
 test "TextHandler sanitizes string value control chars" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);
@@ -281,7 +281,7 @@ test "TextHandler sanitizes string value control chars" {
 
 test "TextHandler key sanitization with control characters" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
     const handler = init(&ctx);
@@ -313,7 +313,7 @@ test "TextHandler key sanitization with control characters" {
 
 test "TextHandler all value types" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
     const handler = init(&ctx);
@@ -356,7 +356,7 @@ test "TextHandler all value types" {
 
 test "TextHandler f64 NaN and Inf render as null" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
     const handler = init(&ctx);
@@ -384,7 +384,7 @@ test "TextHandler f64 NaN and Inf render as null" {
 
 test "TextHandler level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .warn, Clock.system());
     const handler = init(&ctx);
@@ -408,7 +408,7 @@ test "TextHandler level filtering" {
 
 test "TextHandler msg_id when different from message" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);
@@ -433,7 +433,7 @@ test "TextHandler msg_id when different from message" {
 
 test "TextHandler msg_id omitted when same as message" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
     const handler = init(&ctx);

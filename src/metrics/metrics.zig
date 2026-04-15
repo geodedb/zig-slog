@@ -104,7 +104,7 @@ pub const Metrics = struct {
     /// Render metrics in Prometheus text format.
     pub fn renderPrometheus(self: *const Metrics, buf: []u8) []const u8 {
         const snap = self.snapshot();
-        var fbs = std.io.fixedBufferStream(buf);
+        var fbs = std.Io.fixedBufferStream(buf);
         const writer = fbs.writer();
 
         writer.print(

@@ -144,9 +144,9 @@ const text_handler = @import("text_handler.zig");
 
 test "MultiHandler delivers records to all children" {
     var buf1: [4096]u8 = undefined;
-    var fbs1 = std.io.fixedBufferStream(&buf1);
+    var fbs1 = std.Io.fixedBufferStream(&buf1);
     var buf2: [4096]u8 = undefined;
-    var fbs2 = std.io.fixedBufferStream(&buf2);
+    var fbs2 = std.Io.fixedBufferStream(&buf2);
 
     var text_ctx1 = text_handler.Context.init(fbs1.writer().any(), .info, Clock.system());
     var text_ctx2 = text_handler.Context.init(fbs2.writer().any(), .info, Clock.system());
@@ -183,7 +183,7 @@ test "MultiHandler delivers records to all children" {
 
 test "MultiHandler level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var text_ctx = text_handler.Context.init(fbs.writer().any(), .trace, Clock.system());
 
@@ -228,9 +228,9 @@ test "MultiHandler level filtering" {
 
 test "MultiHandler flush propagates to all children" {
     var buf1: [4096]u8 = undefined;
-    var fbs1 = std.io.fixedBufferStream(&buf1);
+    var fbs1 = std.Io.fixedBufferStream(&buf1);
     var buf2: [4096]u8 = undefined;
-    var fbs2 = std.io.fixedBufferStream(&buf2);
+    var fbs2 = std.Io.fixedBufferStream(&buf2);
 
     var text_ctx1 = text_handler.Context.init(fbs1.writer().any(), .info, Clock.system());
     var text_ctx2 = text_handler.Context.init(fbs2.writer().any(), .info, Clock.system());
@@ -276,7 +276,7 @@ var failing_ctx_storage: u8 = 0;
 
 test "MultiHandler one handler error does not prevent delivery to others" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
 
     var text_ctx = text_handler.Context.init(fbs.writer().any(), .info, Clock.system());
 

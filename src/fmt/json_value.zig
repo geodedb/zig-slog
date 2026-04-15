@@ -80,7 +80,7 @@ pub fn writeJsonValue(enc: anytype, value: Value) !void {
 fn testJsonValue(value: Value) ![]const u8 {
     const json = @import("json");
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     var stack_buf: [128]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&stack_buf);
     var enc = json.streamingEncoder(fba.allocator(), fbs.writer(), .{});

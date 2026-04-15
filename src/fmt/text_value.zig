@@ -61,56 +61,56 @@ pub fn writeTextValue(writer: anytype, value: Value) !void {
 
 test "writeTextValue str" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .str = "hello world" });
     try std.testing.expectEqualStrings("hello world", fbs.getWritten());
 }
 
 test "writeTextValue str sanitizes control chars" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .str = "line1\nline2" });
     try std.testing.expectEqualStrings("line1\\nline2", fbs.getWritten());
 }
 
 test "writeTextValue i64" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .i64 = -42 });
     try std.testing.expectEqualStrings("-42", fbs.getWritten());
 }
 
 test "writeTextValue u64" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .u64 = 1000 });
     try std.testing.expectEqualStrings("1000", fbs.getWritten());
 }
 
 test "writeTextValue f64" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .f64 = 3.14 });
     try std.testing.expect(std.mem.indexOf(u8, fbs.getWritten(), "3.14") != null);
 }
 
 test "writeTextValue f64 NaN" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .f64 = std.math.nan(f64) });
     try std.testing.expectEqualStrings("null", fbs.getWritten());
 }
 
 test "writeTextValue f64 Inf" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .f64 = std.math.inf(f64) });
     try std.testing.expectEqualStrings("null", fbs.getWritten());
 }
 
 test "writeTextValue bool" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .bool = true });
     try std.testing.expectEqualStrings("true", fbs.getWritten());
 
@@ -121,28 +121,28 @@ test "writeTextValue bool" {
 
 test "writeTextValue bytes" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .bytes = &[_]u8{ 0xde, 0xad, 0xbe, 0xef } });
     try std.testing.expectEqualStrings("0xdeadbeef", fbs.getWritten());
 }
 
 test "writeTextValue err" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .err = error.OutOfMemory });
     try std.testing.expectEqualStrings("OutOfMemory", fbs.getWritten());
 }
 
 test "writeTextValue secret" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try writeTextValue(fbs.writer(), Value{ .secret = @import("../value.zig").Secret.init("hidden") });
     try std.testing.expectEqualStrings("[REDACTED]", fbs.getWritten());
 }
 
 test "writeTextValue marshaler" {
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     // Create a dummy marshaler pointer for testing
     const m = @import("../value.zig").Marshaler{
         .ctx = null,
