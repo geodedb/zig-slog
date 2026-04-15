@@ -107,13 +107,13 @@ fn serializeValue(buf: *[MAX_VALUE_LEN]u8, val: Value) usize {
                 @memcpy(buf[0..null_str.len], null_str);
                 return null_str.len;
             }
-            var fbs = std.Io.fixedBufferStream(buf);
-            fbs.writer().print("{d:.6}", .{f}) catch {
+            var fbs: std.Io.Writer = .fixed(buf);
+            fbs.print("{d:.6}", .{f}) catch {
                 const fallback = "0.000000";
                 @memcpy(buf[0..fallback.len], fallback);
                 return fallback.len;
             };
-            return fbs.pos;
+            return fbs.end;
         },
         .bool => |b| {
             const s = if (b) "true" else "false";
@@ -263,11 +263,11 @@ pub fn BoundedQueue(comptime T: type) type {
         tail: usize,
         count: usize,
         dropped: usize,
-        mutex: std.Thread.Mutex,
-        not_empty: std.Thread.Condition,
-        not_full: std.Thread.Condition,
+        mutex: std.Io.Mutex,
+        not_empty: std.Io.Condition,
+        not_full: std.Io.Condition,
         /// Condition variable signaled when the queue becomes empty.
-        empty: std.Thread.Condition,
+        empty: std.Io.Condition,
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
             const buffer = try allocator.alloc(T, capacity);
@@ -277,7 +277,7 @@ pub fn BoundedQueue(comptime T: type) type {
                 .tail = 0,
                 .count = 0,
                 .dropped = 0,
-                .mutex = .{},
+                .mutex = std.Io.Mutex.init,
                 .not_empty = .{},
                 .not_full = .{},
                 .empty = .{},
@@ -292,8 +292,8 @@ pub fn BoundedQueue(comptime T: type) type {
         /// Returns the queue length after the push, allowing callers to
         /// avoid a separate `len()` call (which would re-acquire the mutex).
         pub fn pushDropOldest(self: *Self, item: T) usize {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.count == self.buffer.len) {
                 // Drop oldest
@@ -311,8 +311,8 @@ pub fn BoundedQueue(comptime T: type) type {
 
         /// Push item, blocking if full (with timeout).
         pub fn pushBlocking(self: *Self, item: T, timeout_ms: u32) QueueError!void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.count == self.buffer.len) {
                 if (timeout_ms == 0) {
@@ -336,8 +336,8 @@ pub fn BoundedQueue(comptime T: type) type {
 
         /// Pop item, blocking until available.
         pub fn pop(self: *Self) T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             while (self.count == 0) {
                 self.not_empty.wait(&self.mutex);
@@ -353,8 +353,8 @@ pub fn BoundedQueue(comptime T: type) type {
 
         /// Try to pop item without blocking.
         pub fn tryPop(self: *Self) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.count == 0) return null;
 
@@ -368,8 +368,8 @@ pub fn BoundedQueue(comptime T: type) type {
 
         /// Pop with timeout.
         pub fn popTimeout(self: *Self, timeout_ms: u32) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.count == 0) {
                 if (timeout_ms == 0) return null;
@@ -387,20 +387,20 @@ pub fn BoundedQueue(comptime T: type) type {
         }
 
         pub fn len(self: *Self) usize {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return self.count;
         }
 
         pub fn droppedCount(self: *Self) usize {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return self.dropped;
         }
 
         pub fn resetDropped(self: *Self) usize {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             const d = self.dropped;
             self.dropped = 0;
             return d;
@@ -409,8 +409,8 @@ pub fn BoundedQueue(comptime T: type) type {
         /// Wait until the queue is empty or the timeout expires.
         /// Returns true if the queue is empty, false on timeout.
         pub fn waitEmpty(self: *Self, timeout_ms: u32) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.count == 0) return true;
             if (timeout_ms == 0) return false;

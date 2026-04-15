@@ -71,7 +71,7 @@ var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
 /// Atomic flag for the fast-path of the double-checked locking pattern.
 /// Set to true after global_pool has been fully initialized.
 var pool_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-var pool_mutex: std.Thread.Mutex = .{};
+var pool_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 /// Explicitly initialize the global spice thread pool with a given allocator
 /// and configuration. If the pool is already initialized, this is a no-op.
@@ -82,8 +82,8 @@ var pool_mutex: std.Thread.Mutex = .{};
 pub fn initPool(allocator: std.mem.Allocator, config: spice.ThreadPoolConfig) void {
     // spice always enabled when this module is compiled
 
-    pool_mutex.lock();
-    defer pool_mutex.unlock();
+    pool_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer pool_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_pool == null) {
         global_pool = spice.ThreadPool.init(allocator);
@@ -101,8 +101,8 @@ pub fn getPool() if (true) *spice.ThreadPool else void {
     }
 
     // Slow path: acquire mutex and double-check.
-    pool_mutex.lock();
-    defer pool_mutex.unlock();
+    pool_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer pool_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_pool == null) {
         global_pool = spice.ThreadPool.init(std.heap.page_allocator);
@@ -115,8 +115,8 @@ pub fn getPool() if (true) *spice.ThreadPool else void {
 pub fn deinitPool() void {
     // spice always enabled when this module is compiled
 
-    pool_mutex.lock();
-    defer pool_mutex.unlock();
+    pool_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer pool_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_pool) |*pool| {
         pool.deinit();

@@ -41,7 +41,7 @@ pub const Context = struct {
     current_size: usize,
     level: std.atomic.Value(i32),
     clock: Clock,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     path_buf: [std.fs.max_path_bytes]u8,
     path_buf2: [std.fs.max_path_bytes]u8,
     write_buf: [WRITE_BUF_SIZE]u8,
@@ -58,7 +58,7 @@ pub const Context = struct {
             .current_size = 0,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
             .path_buf = undefined,
             .path_buf2 = undefined,
             .write_buf = undefined,
@@ -70,8 +70,8 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Flush buffered data before closing
         self.flushWriteBuf() catch {
@@ -244,8 +244,8 @@ pub const Context = struct {
     }
 
     pub fn reopen(self: *Context) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Flush buffered data before reopening
         self.flushWriteBuf() catch {
@@ -266,19 +266,19 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
     if (!rec.level.atLeast(current_level)) return;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Check if rotation needed
     ctx.checkRotate() catch return error.WriteFailed;
 
     // Format the record
     var buf: [8192]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    writeTextRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
+    writeTextRecord(&fbs, rec, "") catch return error.WriteFailed;
 
-    ctx.write(fbs.getWritten()) catch return error.WriteFailed;
+    ctx.write(fbs.buffered()) catch return error.WriteFailed;
 }
 
 fn withAttrs(ctx_ptr: *anyopaque, _: []const Attr) Handler {
@@ -302,8 +302,8 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
 
 fn flush(ctx_ptr: *anyopaque, _: u32) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Flush the write buffer to the file
     ctx.flushWriteBuf() catch return error.FlushFailed;

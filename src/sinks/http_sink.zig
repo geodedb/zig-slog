@@ -43,7 +43,7 @@ pub const Context = struct {
     options: HttpOptions,
     level: std.atomic.Value(i32),
     clock: Clock,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     consecutive_failures: u32,
 
     // Parsed URL components
@@ -87,7 +87,7 @@ pub const Context = struct {
             .options = options,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
             .consecutive_failures = 0,
             .host = host,
             .port = port,
@@ -122,10 +122,10 @@ pub const Context = struct {
 
     fn sendHttp(self: *Context, data: []const u8) bool {
         // Connect: fast path for literal IP, slow path with DNS resolution
-        const stream = if (std.net.Address.parseIp4(self.host, self.port)) |address|
-            std.net.tcpConnectToAddress(address) catch return false
+        const stream = if (std.Io.net.Address.parseIp4(self.host, self.port)) |address|
+            std.Io.net.tcpConnectToAddress(address) catch return false
         else |_|
-            std.net.tcpConnectToHost(self.allocator, self.host, self.port) catch return false;
+            std.Io.net.tcpConnectToHost(self.allocator, self.host, self.port) catch return false;
         defer stream.close();
 
         // Apply socket timeouts
@@ -197,15 +197,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Format record as JSON OUTSIDE the mutex
     var buf: [16384]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    writeJsonRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
+    writeJsonRecord(&fbs, rec, "") catch return error.WriteFailed;
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Lock only for the network send
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     ctx.sendWithRetry(output) catch {
         metrics.global.incErrors();

@@ -25,7 +25,7 @@ pub const Context = struct {
     clock: Clock,
     prefix: []const u8,
     context_attrs: []const Attr,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn init(writer: *std.Io.Writer, level: Level, clock: Clock) Context {
         return .{
@@ -34,7 +34,7 @@ pub const Context = struct {
             .clock = clock,
             .prefix = "",
             .context_attrs = &.{},
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 };
@@ -45,15 +45,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
     if (!rec.level.atLeast(current_level)) return;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var buf: [16384]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    writeJsonRecord(fbs.writer(), rec, ctx.prefix) catch return error.WriteFailed;
+    writeJsonRecord(&fbs, rec, ctx.prefix) catch return error.WriteFailed;
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     ctx.writer.writeAll(output) catch return error.WriteFailed;
     metrics.global.addBytesWritten(output.len);
 }
@@ -106,9 +106,9 @@ pub fn initWithWriter(writer: *std.Io.Writer, level: Level, clock: Clock) Contex
 
 test "JSONHandler basic output" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -126,7 +126,7 @@ test "JSONHandler basic output" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Verify JSON structure
     try std.testing.expect(std.mem.indexOf(u8, output, "\"time\":\"") != null);
@@ -140,9 +140,9 @@ test "JSONHandler basic output" {
 
 test "JSONHandler escaping" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -157,7 +157,7 @@ test "JSONHandler escaping" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\\\"quoted\\\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\\n") != null);
@@ -165,9 +165,9 @@ test "JSONHandler escaping" {
 
 test "JSONHandler secret redaction" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -184,7 +184,7 @@ test "JSONHandler secret redaction" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "secret123") == null);
@@ -192,9 +192,9 @@ test "JSONHandler secret redaction" {
 
 test "JSONHandler auto-redacts sensitive keys" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -212,7 +212,7 @@ test "JSONHandler auto-redacts sensitive keys" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // password should be redacted
     try std.testing.expect(std.mem.indexOf(u8, output, "hunter2") == null);
@@ -223,9 +223,9 @@ test "JSONHandler auto-redacts sensitive keys" {
 
 test "JSONHandler NaN/Inf written as null" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -244,7 +244,7 @@ test "JSONHandler NaN/Inf written as null" {
 
     // Should succeed (previously would return InvalidRecord)
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // NaN and Inf should be written as null
     try std.testing.expect(std.mem.indexOf(u8, output, "\"nan_val\":null") != null);
@@ -253,9 +253,9 @@ test "JSONHandler NaN/Inf written as null" {
 
 test "JSONHandler all value types" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    var ctx = Context.init(&fbs, .trace, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -280,7 +280,7 @@ test "JSONHandler all value types" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"str_key\":\"hello\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"i64_key\":-42") != null);
@@ -296,9 +296,9 @@ test "JSONHandler all value types" {
 
 test "JSONHandler level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .@"error", Clock.system());
+    var ctx = Context.init(&fbs, .@"error", Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -313,16 +313,16 @@ test "JSONHandler level filtering" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expectEqual(@as(usize, 0), output.len);
 }
 
 test "JSONHandler key sanitization" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    var ctx = Context.init(&fbs, .trace, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -340,7 +340,7 @@ test "JSONHandler key sanitization" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"valid_key\":\"ok\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"bad_key_\":\"sanitized\"") != null);
@@ -348,9 +348,9 @@ test "JSONHandler key sanitization" {
 
 test "JSONHandler msg_id when different from message" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     // msg_id differs from message (e.g., after i18n translation)
@@ -366,7 +366,7 @@ test "JSONHandler msg_id when different from message" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"msg\":\"Application started successfully\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"msg_id\":\"app.started\"") != null);
@@ -374,9 +374,9 @@ test "JSONHandler msg_id when different from message" {
 
 test "JSONHandler msg_id omitted when same as message" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     // msg_id same as message (common case, no translation)
@@ -392,7 +392,7 @@ test "JSONHandler msg_id omitted when same as message" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // msg_id should NOT appear when it equals message
     try std.testing.expect(std.mem.indexOf(u8, output, "\"msg_id\"") == null);

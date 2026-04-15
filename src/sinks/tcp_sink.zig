@@ -33,10 +33,10 @@ pub const TcpOptions = struct {
 pub const Context = struct {
     allocator: std.mem.Allocator,
     options: TcpOptions,
-    stream: ?std.net.Stream,
+    stream: ?std.Io.net.Stream,
     level: std.atomic.Value(i32),
     clock: Clock,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     consecutive_failures: u32,
     circuit_open_until: i64,
 
@@ -52,15 +52,15 @@ pub const Context = struct {
             .stream = null,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
             .consecutive_failures = 0,
             .circuit_open_until = 0,
         };
     }
 
     pub fn deinit(self: *Context) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.stream) |s| {
             s.close();
@@ -72,20 +72,20 @@ pub const Context = struct {
         if (self.stream != null) return;
 
         // Fast path: try parsing as literal IPv4 or IPv6 address
-        if (std.net.Address.parseIp4(self.options.host, self.options.port)) |address| {
-            self.stream = std.net.tcpConnectToAddress(address) catch return error.ConnectionFailed;
+        if (std.Io.net.Address.parseIp4(self.options.host, self.options.port)) |address| {
+            self.stream = std.Io.net.tcpConnectToAddress(address) catch return error.ConnectionFailed;
             self.applySocketTimeouts();
             return;
         } else |_| {}
 
-        if (std.net.Address.parseIp6(self.options.host, self.options.port)) |addr| {
-            self.stream = std.net.tcpConnectToAddress(addr) catch return error.ConnectionFailed;
+        if (std.Io.net.Address.parseIp6(self.options.host, self.options.port)) |addr| {
+            self.stream = std.Io.net.tcpConnectToAddress(addr) catch return error.ConnectionFailed;
             self.applySocketTimeouts();
             return;
         } else |_| {}
 
         // Slow path: resolve hostname via DNS using tcpConnectToHost
-        self.stream = std.net.tcpConnectToHost(self.allocator, self.options.host, self.options.port) catch return error.ConnectionFailed;
+        self.stream = std.Io.net.tcpConnectToHost(self.allocator, self.options.host, self.options.port) catch return error.ConnectionFailed;
         self.applySocketTimeouts();
     }
 
@@ -171,15 +171,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Format record as JSON line OUTSIDE the mutex
     var buf: [16384]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    writeJsonRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
+    writeJsonRecord(&fbs, rec, "") catch return error.WriteFailed;
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Lock only for the network write
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     ctx.writeWithRetry(output) catch |err| {
         metrics.global.incErrors();

@@ -30,15 +30,15 @@ pub const UdpOptions = struct {
 pub const Context = struct {
     options: UdpOptions,
     socket: ?std.posix.socket_t,
-    dest_addr: std.net.Address,
+    dest_addr: std.Io.net.Address,
     level: std.atomic.Value(i32),
     clock: Clock,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn init(options: UdpOptions, level: Level, clock: Clock) !Context {
         // Parse destination address
-        const dest_addr = std.net.Address.parseIp4(options.host, options.port) catch blk: {
-            break :blk std.net.Address.parseIp6(options.host, options.port) catch {
+        const dest_addr = std.Io.net.Address.parseIp4(options.host, options.port) catch blk: {
+            break :blk std.Io.net.Address.parseIp6(options.host, options.port) catch {
                 return error.InvalidAddress;
             };
         };
@@ -56,13 +56,13 @@ pub const Context = struct {
             .dest_addr = dest_addr,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 
     pub fn deinit(self: *Context) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.socket) |s| {
             std.posix.close(s);
@@ -94,15 +94,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Format record as JSON OUTSIDE the mutex
     var buf: [8192]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    writeJsonRecord(fbs.writer(), rec, "") catch return error.WriteFailed;
+    writeJsonRecord(&fbs, rec, "") catch return error.WriteFailed;
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Lock only for the network send
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     ctx.send(output) catch {
         metrics.global.incErrors();

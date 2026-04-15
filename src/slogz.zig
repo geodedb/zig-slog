@@ -180,9 +180,9 @@ pub fn deinit() void {
 
 test "slogz basic usage" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = text.Context.init(&fbs, .info, Clock.system());
     const handler = text.init(&ctx);
 
     const logger = Logger.init(handler, .info, Clock.system()).named("test");
@@ -192,16 +192,16 @@ test "slogz basic usage" {
         Attr.int("count", 42),
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(output.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, output, "Hello, slogz!") != null);
 }
 
 test "slogz JSON handler" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = json.Context.init(&fbs, .info, Clock.system());
     const handler = json.init(&ctx);
 
     const rec = Record{
@@ -218,7 +218,7 @@ test "slogz JSON handler" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"level\":\"INFO\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"msg\":\"JSON test\"") != null);
@@ -226,9 +226,9 @@ test "slogz JSON handler" {
 
 test "slogz secret redaction" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = text.Context.init(&fbs, .info, Clock.system());
     const handler = text.init(&ctx);
 
     const rec = Record{
@@ -245,7 +245,7 @@ test "slogz secret redaction" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Secret should be redacted
     try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
@@ -254,9 +254,9 @@ test "slogz secret redaction" {
 
 test "slogz level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = text.Context.init(fbs.writer().any(), .warn, Clock.system());
+    var ctx = text.Context.init(&fbs, .warn, Clock.system());
     const handler = text.init(&ctx);
 
     // Debug message should be filtered
@@ -285,7 +285,7 @@ test "slogz level filtering" {
     };
     try handler.handle(&warn_rec);
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "Debug message") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning message") != null);
 }

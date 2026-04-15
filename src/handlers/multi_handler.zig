@@ -144,12 +144,12 @@ const text_handler = @import("text_handler.zig");
 
 test "MultiHandler delivers records to all children" {
     var buf1: [4096]u8 = undefined;
-    var fbs1 = std.Io.fixedBufferStream(&buf1);
+    var fbs1: std.Io.Writer = .fixed(&buf1);
     var buf2: [4096]u8 = undefined;
-    var fbs2 = std.Io.fixedBufferStream(&buf2);
+    var fbs2: std.Io.Writer = .fixed(&buf2);
 
-    var text_ctx1 = text_handler.Context.init(fbs1.writer().any(), .info, Clock.system());
-    var text_ctx2 = text_handler.Context.init(fbs2.writer().any(), .info, Clock.system());
+    var text_ctx1 = text_handler.Context.init(&fbs1, .info, Clock.system());
+    var text_ctx2 = text_handler.Context.init(&fbs2, .info, Clock.system());
 
     const children = [_]Handler{
         text_handler.init(&text_ctx1),
@@ -172,8 +172,8 @@ test "MultiHandler delivers records to all children" {
 
     try handler.handle(&rec);
 
-    const out1 = fbs1.getWritten();
-    const out2 = fbs2.getWritten();
+    const out1 = fbs1.buffered();
+    const out2 = fbs2.buffered();
 
     try std.testing.expect(out1.len > 0);
     try std.testing.expect(out2.len > 0);
@@ -183,9 +183,9 @@ test "MultiHandler delivers records to all children" {
 
 test "MultiHandler level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var text_ctx = text_handler.Context.init(fbs.writer().any(), .trace, Clock.system());
+    var text_ctx = text_handler.Context.init(&fbs, .trace, Clock.system());
 
     const children = [_]Handler{
         text_handler.init(&text_ctx),
@@ -208,7 +208,7 @@ test "MultiHandler level filtering" {
     };
 
     try handler.handle(&debug_rec);
-    try std.testing.expectEqual(@as(usize, 0), fbs.getWritten().len);
+    try std.testing.expectEqual(@as(usize, 0), fbs.buffered().len);
 
     const warn_rec = Record{
         .time_utc_us = 0,
@@ -222,18 +222,18 @@ test "MultiHandler level filtering" {
     };
 
     try handler.handle(&warn_rec);
-    try std.testing.expect(fbs.getWritten().len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, fbs.getWritten(), "warning message") != null);
+    try std.testing.expect(fbs.buffered().len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, fbs.buffered(), "warning message") != null);
 }
 
 test "MultiHandler flush propagates to all children" {
     var buf1: [4096]u8 = undefined;
-    var fbs1 = std.Io.fixedBufferStream(&buf1);
+    var fbs1: std.Io.Writer = .fixed(&buf1);
     var buf2: [4096]u8 = undefined;
-    var fbs2 = std.Io.fixedBufferStream(&buf2);
+    var fbs2: std.Io.Writer = .fixed(&buf2);
 
-    var text_ctx1 = text_handler.Context.init(fbs1.writer().any(), .info, Clock.system());
-    var text_ctx2 = text_handler.Context.init(fbs2.writer().any(), .info, Clock.system());
+    var text_ctx1 = text_handler.Context.init(&fbs1, .info, Clock.system());
+    var text_ctx2 = text_handler.Context.init(&fbs2, .info, Clock.system());
 
     const children = [_]Handler{
         text_handler.init(&text_ctx1),
@@ -276,9 +276,9 @@ var failing_ctx_storage: u8 = 0;
 
 test "MultiHandler one handler error does not prevent delivery to others" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var text_ctx = text_handler.Context.init(fbs.writer().any(), .info, Clock.system());
+    var text_ctx = text_handler.Context.init(&fbs, .info, Clock.system());
 
     const failing_handler = Handler{
         .ctx = @ptrCast(&failing_ctx_storage),
@@ -311,7 +311,7 @@ test "MultiHandler one handler error does not prevent delivery to others" {
     try std.testing.expectError(error.WriteFailed, result);
 
     // ... but the text handler should have still received the record.
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(output.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, output, "should still arrive") != null);
 }

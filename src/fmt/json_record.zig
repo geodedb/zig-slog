@@ -114,7 +114,7 @@ fn writeJsonAttr(enc: anytype, attr: Attr, prefix: []const u8) !void {
 
 test "writeJsonRecord basic" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 1735787045000000,
@@ -130,8 +130,8 @@ test "writeJsonRecord basic" {
         },
     };
 
-    try writeJsonRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeJsonRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"time\":\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"level\":\"INFO\"") != null);
@@ -149,7 +149,7 @@ test "writeJsonRecord basic" {
 
 test "writeJsonRecord with msg_id" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -162,8 +162,8 @@ test "writeJsonRecord with msg_id" {
         .attrs = &.{},
     };
 
-    try writeJsonRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeJsonRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"msg_id\":\"error.timeout\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"msg\":\"Connection timed out after 30s\"") != null);
@@ -171,7 +171,7 @@ test "writeJsonRecord with msg_id" {
 
 test "writeJsonRecord redacts sensitive keys" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -187,8 +187,8 @@ test "writeJsonRecord redacts sensitive keys" {
         },
     };
 
-    try writeJsonRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeJsonRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "hunter2") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
@@ -197,7 +197,7 @@ test "writeJsonRecord redacts sensitive keys" {
 
 test "writeJsonRecord with prefix" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -212,15 +212,15 @@ test "writeJsonRecord with prefix" {
         },
     };
 
-    try writeJsonRecord(fbs.writer(), &rec, "http");
-    const output = fbs.getWritten();
+    try writeJsonRecord(&fbs, &rec, "http");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"http.key\":\"value\"") != null);
 }
 
 test "writeJsonRecord no source when empty" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -233,8 +233,8 @@ test "writeJsonRecord no source when empty" {
         .attrs = &.{},
     };
 
-    try writeJsonRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeJsonRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "source_file") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "source_line") == null);

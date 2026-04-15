@@ -387,9 +387,9 @@ test "fatal_hook uses atomic access" {
 test "Logger.with context attrs appear in output" {
     const text_handler = @import("handlers/text_handler.zig");
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = text_handler.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = text_handler.Context.init(&fbs, .info, Clock.system());
     const handler = text_handler.init(&ctx);
 
     const base_logger = Logger.init(handler, .info, Clock.system());
@@ -405,7 +405,7 @@ test "Logger.with context attrs appear in output" {
         Attr.int("status", 200),
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Context attrs should appear in output
     try std.testing.expect(std.mem.indexOf(u8, output, "service=auth") != null);
@@ -421,9 +421,9 @@ test "Logger.with context attrs appear in output" {
 test "Logger.with context attrs appear in JSON output" {
     const json_handler = @import("handlers/json_handler.zig");
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = json_handler.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = json_handler.Context.init(&fbs, .info, Clock.system());
     const handler = json_handler.init(&ctx);
 
     const base_logger = Logger.init(handler, .info, Clock.system());
@@ -435,7 +435,7 @@ test "Logger.with context attrs appear in JSON output" {
         Attr.string("app", "web"),
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Context attr should appear in JSON output
     try std.testing.expect(std.mem.indexOf(u8, output, "\"env\":\"prod\"") != null);

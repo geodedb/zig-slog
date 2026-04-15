@@ -24,7 +24,7 @@ pub const Context = struct {
     clock: Clock,
     prefix: []const u8,
     context_attrs: []const Attr,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn init(writer: *std.Io.Writer, level: Level, clock: Clock) Context {
         return .{
@@ -33,7 +33,7 @@ pub const Context = struct {
             .clock = clock,
             .prefix = "",
             .context_attrs = &.{},
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 };
@@ -44,15 +44,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
     if (!rec.level.atLeast(current_level)) return;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    writeTextRecord(fbs.writer(), rec, ctx.prefix) catch return error.WriteFailed;
+    writeTextRecord(&fbs, rec, ctx.prefix) catch return error.WriteFailed;
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     ctx.writer.writeAll(output) catch return error.WriteFailed;
     metrics.global.addBytesWritten(output.len);
 }
@@ -106,9 +106,9 @@ pub fn initWithWriter(writer: *std.Io.Writer, level: Level, clock: Clock) Contex
 
 test "TextHandler basic output" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -126,7 +126,7 @@ test "TextHandler basic output" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "INFO") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "web") != null);
@@ -136,9 +136,9 @@ test "TextHandler basic output" {
 
 test "TextHandler secret redaction" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -155,7 +155,7 @@ test "TextHandler secret redaction" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "super_secret") == null);
@@ -163,9 +163,9 @@ test "TextHandler secret redaction" {
 
 test "TextHandler error attribute" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -183,7 +183,7 @@ test "TextHandler error attribute" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "err=OutOfMemory") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ctx=test") != null);
@@ -191,9 +191,9 @@ test "TextHandler error attribute" {
 
 test "TextHandler auto-redacts sensitive keys" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -211,7 +211,7 @@ test "TextHandler auto-redacts sensitive keys" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // api_key should be redacted
     try std.testing.expect(std.mem.indexOf(u8, output, "api_key=" ++ redact.REDACTED) != null);
@@ -222,9 +222,9 @@ test "TextHandler auto-redacts sensitive keys" {
 
 test "TextHandler sanitizes message newlines" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -239,7 +239,7 @@ test "TextHandler sanitizes message newlines" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Newlines should be escaped
     try std.testing.expect(std.mem.indexOf(u8, output, "line1\\nline2\\rline3") != null);
@@ -254,9 +254,9 @@ test "TextHandler sanitizes message newlines" {
 
 test "TextHandler sanitizes string value control chars" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -273,7 +273,7 @@ test "TextHandler sanitizes string value control chars" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Tabs should be escaped
     try std.testing.expect(std.mem.indexOf(u8, output, "value\\twith\\ttabs") != null);
@@ -281,9 +281,9 @@ test "TextHandler sanitizes string value control chars" {
 
 test "TextHandler key sanitization with control characters" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    var ctx = Context.init(&fbs, .trace, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -301,7 +301,7 @@ test "TextHandler key sanitization with control characters" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Control characters in keys should be replaced with '_' by sanitizeKey
     try std.testing.expect(std.mem.indexOf(u8, output, "bad_key=value1") != null);
@@ -313,9 +313,9 @@ test "TextHandler key sanitization with control characters" {
 
 test "TextHandler all value types" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    var ctx = Context.init(&fbs, .trace, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -340,7 +340,7 @@ test "TextHandler all value types" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "str_key=hello") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "i64_key=-42") != null);
@@ -356,9 +356,9 @@ test "TextHandler all value types" {
 
 test "TextHandler f64 NaN and Inf render as null" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .trace, Clock.system());
+    var ctx = Context.init(&fbs, .trace, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -376,7 +376,7 @@ test "TextHandler f64 NaN and Inf render as null" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "nan_val=null") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "inf_val=null") != null);
@@ -384,9 +384,9 @@ test "TextHandler f64 NaN and Inf render as null" {
 
 test "TextHandler level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .warn, Clock.system());
+    var ctx = Context.init(&fbs, .warn, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -401,16 +401,16 @@ test "TextHandler level filtering" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expectEqual(@as(usize, 0), output.len);
 }
 
 test "TextHandler msg_id when different from message" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -425,7 +425,7 @@ test "TextHandler msg_id when different from message" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "Aplicacion iniciada") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "msg_id=app.started") != null);
@@ -433,9 +433,9 @@ test "TextHandler msg_id when different from message" {
 
 test "TextHandler msg_id omitted when same as message" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = Context.init(&fbs, .info, Clock.system());
     const handler = init(&ctx);
 
     const rec = Record{
@@ -450,7 +450,7 @@ test "TextHandler msg_id omitted when same as message" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // msg_id should NOT appear when it equals message
     try std.testing.expect(std.mem.indexOf(u8, output, "msg_id=") == null);

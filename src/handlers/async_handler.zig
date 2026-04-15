@@ -269,10 +269,10 @@ test "AsyncHandler basic" {
     const allocator = std.testing.allocator;
 
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
-    var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
+    var text_ctx = text_handler_mod.Context.init(&fbs, .info, @import("../internal/clock.zig").Clock.system());
     const inner = text_handler_mod.init(&text_ctx);
 
     var async_ctx = try Context.init(allocator, .{
@@ -299,7 +299,7 @@ test "AsyncHandler basic" {
     try handler.handle(&rec);
     try handler.flush(5000);
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(output.len > 0);
 }
 
@@ -307,10 +307,10 @@ test "AsyncHandler preserves attributes through queue" {
     const allocator = std.testing.allocator;
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
-    var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
+    var text_ctx = text_handler_mod.Context.init(&fbs, .info, @import("../internal/clock.zig").Clock.system());
     const inner = text_handler_mod.init(&text_ctx);
 
     var async_ctx = try Context.init(allocator, .{
@@ -341,7 +341,7 @@ test "AsyncHandler preserves attributes through queue" {
     try handler.handle(&rec);
     try handler.flush(5000);
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     // Verify all attributes appear in the output
     try std.testing.expect(std.mem.indexOf(u8, output, "host=localhost") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "port=8080") != null);
@@ -352,10 +352,10 @@ test "AsyncHandler preserves i64 values through queue" {
     const allocator = std.testing.allocator;
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
-    var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
+    var text_ctx = text_handler_mod.Context.init(&fbs, .info, @import("../internal/clock.zig").Clock.system());
     const inner = text_handler_mod.init(&text_ctx);
 
     var async_ctx = try Context.init(allocator, .{
@@ -386,7 +386,7 @@ test "AsyncHandler preserves i64 values through queue" {
     try handler.handle(&rec);
     try handler.flush(5000);
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "count=42") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "negative=-100") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "zero=0") != null);
@@ -396,10 +396,10 @@ test "AsyncHandler redacts secrets in async output" {
     const allocator = std.testing.allocator;
 
     var buf: [8192]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const text_handler_mod = @import("text_handler.zig");
-    var text_ctx = text_handler_mod.Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system());
+    var text_ctx = text_handler_mod.Context.init(&fbs, .info, @import("../internal/clock.zig").Clock.system());
     const inner = text_handler_mod.init(&text_ctx);
 
     var async_ctx = try Context.init(allocator, .{
@@ -429,7 +429,7 @@ test "AsyncHandler redacts secrets in async output" {
     try handler.handle(&rec);
     try handler.flush(5000);
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     // The secret should be redacted, not present in output
     try std.testing.expect(std.mem.indexOf(u8, output, "super_secret_value") == null);
     // The key should still appear with the redacted marker

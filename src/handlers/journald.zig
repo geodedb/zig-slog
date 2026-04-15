@@ -42,13 +42,13 @@ const LOG_DEBUG = 7;
 pub const Context = struct {
     level: std.atomic.Value(i32),
     syslog_identifier: []const u8,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn init(level: Level, syslog_identifier: []const u8) Context {
         return .{
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .syslog_identifier = syslog_identifier,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 };
@@ -74,8 +74,8 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         return error.FeatureDisabled;
     }
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     const priority = levelToPriority(rec.level);
 
@@ -135,15 +135,15 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
             // Format value (auto-redact sensitive keys)
             var val_buf: [256]u8 = undefined;
-            var val_fbs = std.Io.fixedBufferStream(&val_buf);
-            const val_writer = val_fbs.writer();
+            var val_fbs: std.Io.Writer = .fixed(&val_buf);
+            const val_writer = &val_fbs;
             if (redact.isSensitiveKey(attr.key)) {
                 val_writer.writeAll(redact.REDACTED) catch continue;
             } else {
                 writeTextValue(val_writer, attr.value) catch continue;
             }
 
-            const attr_field = std.fmt.bufPrintZ(&fields_buf[field_count], "{s}={s}", .{ upper_key[0..key.len], val_fbs.getWritten() }) catch continue;
+            const attr_field = std.fmt.bufPrintZ(&fields_buf[field_count], "{s}={s}", .{ upper_key[0..key.len], val_fbs.buffered() }) catch continue;
             field_ptrs[field_count] = attr_field.ptr;
             field_count += 1;
         }
@@ -154,8 +154,8 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Stderr fallback: write structured message using a buffer to reduce syscalls.
     var stderr_buf: [8192]u8 = undefined;
-    var stderr_stream = std.Io.fixedBufferStream(&stderr_buf);
-    const stderr_writer = stderr_stream.writer();
+    var stderr_stream: std.Io.Writer = .fixed(&stderr_buf);
+    const stderr_writer = &stderr_stream;
     stderr_writer.print("<{d}>", .{priority}) catch {};
     if (ctx.syslog_identifier.len > 0) {
         stderr_writer.print("{s}: ", .{ctx.syslog_identifier}) catch {};
@@ -175,7 +175,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     }
     stderr_writer.writeByte('\n') catch {};
     const stderr = std.Io.File.stderr();
-    stderr.writeAll(stderr_stream.getWritten()) catch {};
+    stderr.writeAll(stderr_stream.buffered()) catch {};
 
     metrics.global.addBytesWritten(rec.message.len);
 }

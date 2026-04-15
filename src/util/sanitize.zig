@@ -161,33 +161,33 @@ pub fn sanitizeOutput(writer: anytype, s: []const u8) !void {
 
 test "sanitizeOutput" {
     var buf: [256]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var fbs: std.Io.Writer = .fixed(&buf);
+    const writer = &fbs;
 
     // Normal text passes through
     try sanitizeOutput(writer, "hello world");
-    try std.testing.expectEqualStrings("hello world", fbs.getWritten());
+    try std.testing.expectEqualStrings("hello world", fbs.buffered());
 
     // Reset
-    fbs.reset();
+    fbs.end = 0;
 
     // Newlines are escaped
     try sanitizeOutput(writer, "line1\nline2\rline3");
-    try std.testing.expectEqualStrings("line1\\nline2\\rline3", fbs.getWritten());
+    try std.testing.expectEqualStrings("line1\\nline2\\rline3", fbs.buffered());
 
     // Reset
-    fbs.reset();
+    fbs.end = 0;
 
     // Tab is escaped
     try sanitizeOutput(writer, "key\tvalue");
-    try std.testing.expectEqualStrings("key\\tvalue", fbs.getWritten());
+    try std.testing.expectEqualStrings("key\\tvalue", fbs.buffered());
 
     // Reset
-    fbs.reset();
+    fbs.end = 0;
 
     // NUL byte is escaped
     try sanitizeOutput(writer, "before\x00after");
-    try std.testing.expectEqualStrings("before\\x00after", fbs.getWritten());
+    try std.testing.expectEqualStrings("before\\x00after", fbs.buffered());
 }
 
 test "sanitizeKey" {

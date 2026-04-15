@@ -35,14 +35,14 @@ pub const Context = struct {
     level: std.atomic.Value(i32),
     source_name: []const u8,
     event_handle: if (is_available) ?std.os.windows.HANDLE else void,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn init(level: Level, source_name: []const u8) Context {
         var ctx = Context{
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .source_name = source_name,
             .event_handle = if (is_available) null else {},
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
 
         if (is_available) {
@@ -54,8 +54,8 @@ pub const Context = struct {
 
     pub fn deinit(self: *Context) void {
         if (is_available) {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.event_handle) |h| {
                 _ = std.os.windows.kernel32.DeregisterEventSource(h);
@@ -97,13 +97,13 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         return error.FeatureDisabled;
     }
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Format message with attributes
     var msg_buf: [8192]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&msg_buf);
-    const writer = fbs.writer();
+    var fbs: std.Io.Writer = .fixed(&msg_buf);
+    const writer = &fbs;
 
     sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
 
@@ -121,7 +121,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
         }
     }
 
-    const message = fbs.getWritten();
+    const message = fbs.buffered();
 
     if (is_available) {
         // Convert to wide string for Windows API
@@ -138,8 +138,8 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
 
     // Fallback: write sanitized output to stderr using a buffer to reduce syscalls
     var stderr_buf: [8192]u8 = undefined;
-    var stderr_stream = std.Io.fixedBufferStream(&stderr_buf);
-    const stderr_writer = stderr_stream.writer();
+    var stderr_stream: std.Io.Writer = .fixed(&stderr_buf);
+    const stderr_writer = &stderr_stream;
     stderr_writer.writeByte('[') catch {};
     stderr_writer.writeAll(rec.level.asText()) catch {};
     stderr_writer.writeAll("] ") catch {};
@@ -147,7 +147,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     stderr_writer.writeAll(": ") catch {};
     stderr_writer.writeAll(message) catch {};
     stderr_writer.writeByte('\n') catch {};
-    std.fs.File.stderr().writeAll(stderr_stream.getWritten()) catch {};
+    std.fs.File.stderr().writeAll(stderr_stream.buffered()) catch {};
 
     metrics.global.addBytesWritten(message.len);
 }

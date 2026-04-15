@@ -104,8 +104,8 @@ pub const Metrics = struct {
     /// Render metrics in Prometheus text format.
     pub fn renderPrometheus(self: *const Metrics, buf: []u8) []const u8 {
         const snap = self.snapshot();
-        var fbs = std.Io.fixedBufferStream(buf);
-        const writer = fbs.writer();
+        var fbs: std.Io.Writer = .fixed(buf);
+        const writer = &fbs;
 
         writer.print(
             \\# HELP slogz_logs_emitted_total Total number of log records emitted.
@@ -140,7 +140,7 @@ pub const Metrics = struct {
             snap.reconnections_total,
         }) catch {};
 
-        return fbs.getWritten();
+        return fbs.buffered();
     }
 };
 

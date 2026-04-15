@@ -79,7 +79,7 @@ pub const Context = struct {
     clock: Clock,
     options: SyslogOptions,
     context_attrs: []const Attr,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn init(writer: *std.Io.Writer, level: Level, clock: Clock, options: SyslogOptions) Context {
         return .{
@@ -88,7 +88,7 @@ pub const Context = struct {
             .clock = clock,
             .options = options,
             .context_attrs = &.{},
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 };
@@ -115,12 +115,12 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
     if (!rec.level.atLeast(current_level)) return;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer ctx.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var buf: [16384]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var fbs: std.Io.Writer = .fixed(&buf);
+    const writer = &fbs;
 
     // PRI
     const severity = levelToSeverity(rec.level);
@@ -190,7 +190,7 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     sanitize.sanitizeOutput(writer, rec.message) catch return error.WriteFailed;
     writer.writeByte('\n') catch return error.WriteFailed;
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     ctx.writer.writeAll(output) catch return error.WriteFailed;
     metrics.global.addBytesWritten(output.len);
 }
@@ -325,9 +325,9 @@ pub fn init(ctx: *Context) Handler {
 
 test "SyslogHandler basic output" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system(), .{
+    var ctx = Context.init(&fbs, .info, @import("../internal/clock.zig").Clock.system(), .{
         .facility = .local0,
         .hostname = "localhost",
         .app_name = "test",
@@ -349,7 +349,7 @@ test "SyslogHandler basic output" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // PRI for local0.info = 16*8 + 6 = 134
     try std.testing.expect(std.mem.startsWith(u8, output, "<134>1 "));
@@ -364,9 +364,9 @@ test "SyslogHandler basic output" {
 
 test "SyslogHandler escaping" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = Context.init(fbs.writer().any(), .info, @import("../internal/clock.zig").Clock.system(), .{
+    var ctx = Context.init(&fbs, .info, @import("../internal/clock.zig").Clock.system(), .{
         .hostname = "localhost",
     });
     const handler = init(&ctx);
@@ -385,7 +385,7 @@ test "SyslogHandler escaping" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Check escaping
     try std.testing.expect(std.mem.indexOf(u8, output, "\\\"") != null);

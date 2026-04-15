@@ -101,7 +101,7 @@ fn writeTextAttrValue(writer: anytype, value: Value) !void {
 
 test "writeTextRecord basic" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 1735787045000000,
@@ -117,8 +117,8 @@ test "writeTextRecord basic" {
         },
     };
 
-    try writeTextRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeTextRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "INFO") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "web") != null);
@@ -133,7 +133,7 @@ test "writeTextRecord basic" {
 
 test "writeTextRecord with msg_id" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -146,8 +146,8 @@ test "writeTextRecord with msg_id" {
         .attrs = &.{},
     };
 
-    try writeTextRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeTextRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "msg_id=error.timeout") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Connection timed out") != null);
@@ -155,7 +155,7 @@ test "writeTextRecord with msg_id" {
 
 test "writeTextRecord redacts sensitive keys" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -171,8 +171,8 @@ test "writeTextRecord redacts sensitive keys" {
         },
     };
 
-    try writeTextRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeTextRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "hunter2") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, redact.REDACTED) != null);
@@ -181,7 +181,7 @@ test "writeTextRecord redacts sensitive keys" {
 
 test "writeTextRecord with prefix" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -196,15 +196,15 @@ test "writeTextRecord with prefix" {
         },
     };
 
-    try writeTextRecord(fbs.writer(), &rec, "http");
-    const output = fbs.getWritten();
+    try writeTextRecord(&fbs, &rec, "http");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "http.key=value") != null);
 }
 
 test "writeTextRecord sanitizes newlines in message" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     const rec = Record{
         .time_utc_us = 0,
@@ -217,8 +217,8 @@ test "writeTextRecord sanitizes newlines in message" {
         .attrs = &.{},
     };
 
-    try writeTextRecord(fbs.writer(), &rec, "");
-    const output = fbs.getWritten();
+    try writeTextRecord(&fbs, &rec, "");
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "line1\\nline2") != null);
     // Only 1 raw newline (the line terminator)
