@@ -178,7 +178,7 @@ pub fn exportPrometheusMetrics(buf: []u8) []const u8 {
     return metrics.global.renderPrometheus(buf);
 }
 
-/// Shut down the slogz library, releasing the global spice thread pool
+/// Shut down the slogz library, releasing the global thread pool
 /// (if enabled and initialized). Call this during application shutdown
 /// after all loggers and handlers have been closed.
 pub fn deinit() void {

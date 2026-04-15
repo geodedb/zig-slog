@@ -11,20 +11,20 @@ pub fn build(b: *std.Build) void {
     const feature_journald = b.option(bool, "feature_journald", "Enable journald support (requires libsystemd)") orelse false;
     const feature_windows_eventlog = b.option(bool, "feature_windows_eventlog", "Enable Windows Event Log support") orelse false;
 
-    // Spice parallelism option
-    const enable_spice = b.option(bool, "spice", "Enable spice-based parallelism") orelse true;
+    // Thread-pool parallelism option
+    const enable_tp = b.option(bool, "enable_tp", "Enable thread-pool-based parallelism") orelse true;
 
     const build_options = b.addOptions();
     build_options.addOption(bool, "feature_journald", feature_journald);
     build_options.addOption(bool, "feature_windows_eventlog", feature_windows_eventlog);
 
-    // Get spice dependency if enabled
-    const spice_mod: ?*std.Build.Module = if (enable_spice) blk: {
-        const spice_dep = b.dependency("spice", .{
+    // Get thread_pool dependency if enabled
+    const tp_mod: ?*std.Build.Module = if (enable_tp) blk: {
+        const tp_dep = b.dependency("thread_pool", .{
             .target = target,
             .optimize = optimize,
         });
-        break :blk spice_dep.module("spice");
+        break :blk tp_dep.module("thread_pool");
     } else null;
 
     // Get dependencies
@@ -33,7 +33,6 @@ pub fn build(b: *std.Build) void {
         const json_dep = b.dependency("json", .{
             .target = target,
             .optimize = optimize,
-            .spice = false,
         });
         break :blk json_dep.module("json");
     } else null;
@@ -45,8 +44,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     if (json_mod) |m| slogz_mod.addImport("json", m);
-    if (spice_mod) |sm| {
-        slogz_mod.addImport("spice", sm);
+    if (tp_mod) |sm| {
+        slogz_mod.addImport("thread_pool", sm);
     }
 
     // Link libsystemd if journald is enabled
@@ -63,8 +62,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     if (json_mod) |m| unit_tests.root_module.addImport("json", m);
-    if (spice_mod) |sm| {
-        unit_tests.root_module.addImport("spice", sm);
+    if (tp_mod) |sm| {
+        unit_tests.root_module.addImport("thread_pool", sm);
     }
     if (feature_journald) {
         unit_tests.root_module.linkSystemLibrary("systemd", .{});
@@ -244,8 +243,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     if (json_mod) |m| docs_lib.root_module.addImport("json", m);
-    if (spice_mod) |sm| {
-        docs_lib.root_module.addImport("spice", sm);
+    if (tp_mod) |sm| {
+        docs_lib.root_module.addImport("thread_pool", sm);
     }
     const install_docs = b.addInstallDirectory(.{
         .source_dir = docs_lib.getEmittedDocs(),

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
-//! Parallel slog operations using spice heartbeat scheduling.
+//! Parallel slog operations using thread-pool submitBatch/WaitGroup.
 //!
 //! Provides high-performance parallel implementations for logging
 //! operations including batch record formatting, multi-handler dispatch,
@@ -10,13 +10,13 @@
 //! ## Overview
 //!
 //! This module enables parallel processing of logging operations using
-//! the spice thread pool. Ideal for high-throughput logging systems
+//! the thread-pool library. Ideal for high-throughput logging systems
 //! that need to format and dispatch many log records simultaneously.
 //!
 //! ## Build Configuration
 //!
-//! Enable: `-Dspice=true` (default)
-//! Disable: `-Dspice=false`
+//! Enable: `-Denable_tp=true` (default)
+//! Disable: `-Denable_tp=false`
 //!
 //! ## Usage Example
 //!
@@ -52,49 +52,35 @@
 //! | Batch Flush      | 8 batches   | Yes              |
 
 const std = @import("std");
-
-const spice = if (true) @import("spice") else struct {
-    pub const ThreadPool = void;
-    pub const Task = void;
-    pub fn Future(comptime I: type, comptime O: type) type {
-        _ = I;
-        _ = O;
-        return void;
-    }
-};
+const tp = @import("thread_pool");
 
 // ============================================================================
 // Global Thread Pool
 // ============================================================================
 
-var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
+var global_pool: ?tp.ThreadPool = null;
 /// Atomic flag for the fast-path of the double-checked locking pattern.
 /// Set to true after global_pool has been fully initialized.
 var pool_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var pool_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
-/// Explicitly initialize the global spice thread pool with a given allocator
+/// Explicitly initialize the global thread pool with a given allocator
 /// and configuration. If the pool is already initialized, this is a no-op.
 ///
 /// Call this during application startup to control the allocator and thread
 /// count. If not called, `getPool()` will lazily initialize with
 /// `page_allocator` and default configuration.
-pub fn initPool(allocator: std.mem.Allocator, config: spice.ThreadPoolConfig) void {
-    // spice always enabled when this module is compiled
-
+pub fn initPool(allocator: std.mem.Allocator, config: tp.Config) void {
     pool_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer pool_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_pool == null) {
-        global_pool = spice.ThreadPool.init(allocator);
-        global_pool.?.start(config);
+        global_pool = tp.ThreadPool.init(allocator, config) catch @panic("thread-pool init failed");
         pool_initialized.store(true, .release);
     }
 }
 
-pub fn getPool() if (true) *spice.ThreadPool else void {
-    // spice always enabled when this module is compiled
-
+pub fn getPool() *tp.ThreadPool {
     // Fast path: atomic load avoids the mutex when already initialized.
     if (pool_initialized.load(.acquire)) {
         return &global_pool.?;
@@ -105,16 +91,13 @@ pub fn getPool() if (true) *spice.ThreadPool else void {
     defer pool_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_pool == null) {
-        global_pool = spice.ThreadPool.init(std.heap.page_allocator);
-        global_pool.?.start(.{});
+        global_pool = tp.ThreadPool.init(std.heap.page_allocator, .{}) catch @panic("thread-pool init failed");
         pool_initialized.store(true, .release);
     }
     return &global_pool.?;
 }
 
 pub fn deinitPool() void {
-    // spice always enabled when this module is compiled
-
     pool_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer pool_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -148,13 +131,22 @@ pub const RecordInput = struct {
 /// Record formatter function type
 pub const RecordFormatter = *const fn (input: RecordInput, buffer: []u8) FormattedRecord;
 
-/// Context for parallel record formatting
-pub const RecordFormatContext = struct {
+const MAX_CHUNKS = 64;
+
+/// Per-chunk context for parallel record formatting.
+const RecordFormatChunk = struct {
     inputs: []const RecordInput,
     buffers: [][]u8,
     results: []FormattedRecord,
     formatter: RecordFormatter,
 };
+
+fn recordFormatChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *RecordFormatChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.inputs, 0..) |input, i| {
+        chunk.results[i] = chunk.formatter(input, chunk.buffers[i]);
+    }
+}
 
 /// Format multiple log records in parallel.
 ///
@@ -177,56 +169,42 @@ pub fn parallelRecordFormat(
     std.debug.assert(inputs.len == buffers.len);
     std.debug.assert(inputs.len == results.len);
 
-    if (!true or inputs.len < 8) {
+    if (inputs.len < 8) {
         for (inputs, 0..) |input, i| {
             results[i] = formatter(input, buffers[i]);
         }
         return;
     }
 
+    const n_chunks = @min(inputs.len, MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]RecordFormatChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+
+    const chunk_size = inputs.len / n_chunks;
+    var offset: usize = 0;
+    var n: usize = 0;
+    while (n < n_chunks) : (n += 1) {
+        const end = if (n == n_chunks - 1) inputs.len else offset + chunk_size;
+        chunks[n] = .{
+            .inputs = inputs[offset..end],
+            .buffers = buffers[offset..end],
+            .results = results[offset..end],
+            .formatter = formatter,
+        };
+        batch[n] = .{ .task_fn = recordFormatChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        offset = end;
+    }
+
     const pool = getPool();
-    const ctx = RecordFormatContext{
-        .inputs = inputs,
-        .buffers = buffers,
-        .results = results,
-        .formatter = formatter,
-    };
-    _ = pool.call(void, parallelRecordFormatTask, ctx);
-}
-
-fn parallelRecordFormatTask(t: *spice.Task, ctx: RecordFormatContext) void {
-    const inputs = ctx.inputs;
-    const buffers = ctx.buffers;
-    const results = ctx.results;
-
-    if (inputs.len < 4) {
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        // Fall back to sequential on error
         for (inputs, 0..) |input, i| {
-            results[i] = ctx.formatter(input, buffers[i]);
+            results[i] = formatter(input, buffers[i]);
         }
         return;
-    }
-
-    const mid = inputs.len / 2;
-    const left_ctx = RecordFormatContext{
-        .inputs = inputs[0..mid],
-        .buffers = buffers[0..mid],
-        .results = results[0..mid],
-        .formatter = ctx.formatter,
     };
-    const right_ctx = RecordFormatContext{
-        .inputs = inputs[mid..],
-        .buffers = buffers[mid..],
-        .results = results[mid..],
-        .formatter = ctx.formatter,
-    };
-
-    var fut = spice.Future(RecordFormatContext, void).init();
-    fut.fork(t, parallelRecordFormatTask, right_ctx);
-
-    t.call(void, parallelRecordFormatTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parallelRecordFormatTask, right_ctx);
-    }
+    wg.wait();
 }
 
 // ============================================================================
@@ -246,12 +224,19 @@ pub const HandlerTarget = struct {
     handler_fn: *const fn (ptr: *anyopaque, record_data: []const u8) DispatchResult,
 };
 
-/// Context for parallel handler dispatch
-pub const HandlerDispatchContext = struct {
+/// Per-chunk context for parallel handler dispatch.
+const HandlerDispatchChunk = struct {
     handlers: []const HandlerTarget,
     record_data: []const u8,
     results: []DispatchResult,
 };
+
+fn handlerDispatchChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *HandlerDispatchChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.handlers, 0..) |handler, i| {
+        chunk.results[i] = handler.handler_fn(handler.handler_ptr, chunk.record_data);
+    }
+}
 
 /// Dispatch a single record to multiple handlers in parallel.
 ///
@@ -271,52 +256,40 @@ pub fn parallelHandlerDispatch(
 ) void {
     std.debug.assert(handlers.len == results.len);
 
-    if (!true or handlers.len < 2) {
+    if (handlers.len < 2) {
         for (handlers, 0..) |handler, i| {
             results[i] = handler.handler_fn(handler.handler_ptr, record_data);
         }
         return;
     }
 
+    const n_chunks = @min(handlers.len, MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]HandlerDispatchChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+
+    const chunk_size = handlers.len / n_chunks;
+    var offset: usize = 0;
+    var n: usize = 0;
+    while (n < n_chunks) : (n += 1) {
+        const end = if (n == n_chunks - 1) handlers.len else offset + chunk_size;
+        chunks[n] = .{
+            .handlers = handlers[offset..end],
+            .record_data = record_data,
+            .results = results[offset..end],
+        };
+        batch[n] = .{ .task_fn = handlerDispatchChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        offset = end;
+    }
+
     const pool = getPool();
-    const ctx = HandlerDispatchContext{
-        .handlers = handlers,
-        .record_data = record_data,
-        .results = results,
-    };
-    _ = pool.call(void, parallelHandlerDispatchTask, ctx);
-}
-
-fn parallelHandlerDispatchTask(t: *spice.Task, ctx: HandlerDispatchContext) void {
-    const handlers = ctx.handlers;
-    const results = ctx.results;
-
-    if (handlers.len < 2) {
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         for (handlers, 0..) |handler, i| {
-            results[i] = handler.handler_fn(handler.handler_ptr, ctx.record_data);
+            results[i] = handler.handler_fn(handler.handler_ptr, record_data);
         }
         return;
-    }
-
-    const mid = handlers.len / 2;
-    const left_ctx = HandlerDispatchContext{
-        .handlers = handlers[0..mid],
-        .record_data = ctx.record_data,
-        .results = results[0..mid],
     };
-    const right_ctx = HandlerDispatchContext{
-        .handlers = handlers[mid..],
-        .record_data = ctx.record_data,
-        .results = results[mid..],
-    };
-
-    var fut = spice.Future(HandlerDispatchContext, void).init();
-    fut.fork(t, parallelHandlerDispatchTask, right_ctx);
-
-    t.call(void, parallelHandlerDispatchTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parallelHandlerDispatchTask, right_ctx);
-    }
+    wg.wait();
 }
 
 // ============================================================================
@@ -340,12 +313,19 @@ pub const WriteResult = struct {
 /// Sink writer function type
 pub const SinkWriter = *const fn (sink_ptr: *anyopaque, data: []const u8, flush: bool) WriteResult;
 
-/// Context for parallel sink writes
-pub const SinkWriteContext = struct {
+/// Per-chunk context for parallel sink writes.
+const SinkWriteChunk = struct {
     inputs: []const WriteInput,
     results: []WriteResult,
     writer: SinkWriter,
 };
+
+fn sinkWriteChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *SinkWriteChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.inputs, 0..) |input, i| {
+        chunk.results[i] = chunk.writer(input.sink_ptr, input.data, input.flush);
+    }
+}
 
 /// Write formatted records to multiple sinks in parallel.
 ///
@@ -365,52 +345,40 @@ pub fn parallelSinkWrite(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!true or inputs.len < 4) {
+    if (inputs.len < 4) {
         for (inputs, 0..) |input, i| {
             results[i] = writer(input.sink_ptr, input.data, input.flush);
         }
         return;
     }
 
+    const n_chunks = @min(inputs.len, MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]SinkWriteChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+
+    const chunk_size = inputs.len / n_chunks;
+    var offset: usize = 0;
+    var n: usize = 0;
+    while (n < n_chunks) : (n += 1) {
+        const end = if (n == n_chunks - 1) inputs.len else offset + chunk_size;
+        chunks[n] = .{
+            .inputs = inputs[offset..end],
+            .results = results[offset..end],
+            .writer = writer,
+        };
+        batch[n] = .{ .task_fn = sinkWriteChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        offset = end;
+    }
+
     const pool = getPool();
-    const ctx = SinkWriteContext{
-        .inputs = inputs,
-        .results = results,
-        .writer = writer,
-    };
-    _ = pool.call(void, parallelSinkWriteTask, ctx);
-}
-
-fn parallelSinkWriteTask(t: *spice.Task, ctx: SinkWriteContext) void {
-    const inputs = ctx.inputs;
-    const results = ctx.results;
-
-    if (inputs.len < 2) {
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         for (inputs, 0..) |input, i| {
-            results[i] = ctx.writer(input.sink_ptr, input.data, input.flush);
+            results[i] = writer(input.sink_ptr, input.data, input.flush);
         }
         return;
-    }
-
-    const mid = inputs.len / 2;
-    const left_ctx = SinkWriteContext{
-        .inputs = inputs[0..mid],
-        .results = results[0..mid],
-        .writer = ctx.writer,
     };
-    const right_ctx = SinkWriteContext{
-        .inputs = inputs[mid..],
-        .results = results[mid..],
-        .writer = ctx.writer,
-    };
-
-    var fut = spice.Future(SinkWriteContext, void).init();
-    fut.fork(t, parallelSinkWriteTask, right_ctx);
-
-    t.call(void, parallelSinkWriteTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parallelSinkWriteTask, right_ctx);
-    }
+    wg.wait();
 }
 
 // ============================================================================
@@ -433,12 +401,19 @@ pub const FlushResult = struct {
 /// Sink flusher function type
 pub const SinkFlusher = *const fn (sink_ptr: *anyopaque, timeout_ms: u32) FlushResult;
 
-/// Context for parallel flush
-pub const BatchFlushContext = struct {
+/// Per-chunk context for parallel flush.
+const BatchFlushChunk = struct {
     targets: []const FlushTarget,
     results: []FlushResult,
     flusher: SinkFlusher,
 };
+
+fn batchFlushChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *BatchFlushChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.targets, 0..) |target, i| {
+        chunk.results[i] = chunk.flusher(target.sink_ptr, target.timeout_ms);
+    }
+}
 
 /// Flush multiple sinks in parallel.
 ///
@@ -458,52 +433,40 @@ pub fn parallelBatchFlush(
 ) void {
     std.debug.assert(targets.len == results.len);
 
-    if (!true or targets.len < 2) {
+    if (targets.len < 2) {
         for (targets, 0..) |target, i| {
             results[i] = flusher(target.sink_ptr, target.timeout_ms);
         }
         return;
     }
 
+    const n_chunks = @min(targets.len, MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]BatchFlushChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+
+    const chunk_size = targets.len / n_chunks;
+    var offset: usize = 0;
+    var n: usize = 0;
+    while (n < n_chunks) : (n += 1) {
+        const end = if (n == n_chunks - 1) targets.len else offset + chunk_size;
+        chunks[n] = .{
+            .targets = targets[offset..end],
+            .results = results[offset..end],
+            .flusher = flusher,
+        };
+        batch[n] = .{ .task_fn = batchFlushChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        offset = end;
+    }
+
     const pool = getPool();
-    const ctx = BatchFlushContext{
-        .targets = targets,
-        .results = results,
-        .flusher = flusher,
-    };
-    _ = pool.call(void, parallelBatchFlushTask, ctx);
-}
-
-fn parallelBatchFlushTask(t: *spice.Task, ctx: BatchFlushContext) void {
-    const targets = ctx.targets;
-    const results = ctx.results;
-
-    if (targets.len < 2) {
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         for (targets, 0..) |target, i| {
-            results[i] = ctx.flusher(target.sink_ptr, target.timeout_ms);
+            results[i] = flusher(target.sink_ptr, target.timeout_ms);
         }
         return;
-    }
-
-    const mid = targets.len / 2;
-    const left_ctx = BatchFlushContext{
-        .targets = targets[0..mid],
-        .results = results[0..mid],
-        .flusher = ctx.flusher,
     };
-    const right_ctx = BatchFlushContext{
-        .targets = targets[mid..],
-        .results = results[mid..],
-        .flusher = ctx.flusher,
-    };
-
-    var fut = spice.Future(BatchFlushContext, void).init();
-    fut.fork(t, parallelBatchFlushTask, right_ctx);
-
-    t.call(void, parallelBatchFlushTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parallelBatchFlushTask, right_ctx);
-    }
+    wg.wait();
 }
 
 // ============================================================================
@@ -519,19 +482,30 @@ pub const MultiHandlerResult = struct {
     err: ?HandlerError,
 };
 
-/// Context for parallel multi-handler dispatch.
-pub const MultiHandlerDispatchContext = struct {
+/// Per-chunk context for parallel multi-handler dispatch.
+const MultiHandlerChunk = struct {
     handlers: []const Handler,
     record: *const Record,
     results: []MultiHandlerResult,
 };
+
+fn multiHandlerChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *MultiHandlerChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.handlers, 0..) |h, i| {
+        h.handle(chunk.record) catch |err| {
+            chunk.results[i] = .{ .err = err };
+            continue;
+        };
+        chunk.results[i] = .{ .err = null };
+    }
+}
 
 /// Dispatch a record to multiple Handler instances in parallel.
 ///
 /// Each handler receives the same Record pointer. Results are collected
 /// per-handler so the caller can inspect individual errors.
 ///
-/// Threshold: Uses parallel processing for 2+ handlers when spice is enabled.
+/// Threshold: Uses parallel processing for 2+ handlers.
 pub fn dispatchHandlers(
     handlers: []const Handler,
     record: *const Record,
@@ -539,7 +513,7 @@ pub fn dispatchHandlers(
 ) void {
     std.debug.assert(handlers.len == results.len);
 
-    if (!true or handlers.len < 2) {
+    if (handlers.len < 2) {
         for (handlers, 0..) |h, i| {
             h.handle(record) catch |err| {
                 results[i] = .{ .err = err };
@@ -550,49 +524,37 @@ pub fn dispatchHandlers(
         return;
     }
 
+    const n_chunks = @min(handlers.len, MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]MultiHandlerChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+
+    const chunk_size = handlers.len / n_chunks;
+    var offset: usize = 0;
+    var n: usize = 0;
+    while (n < n_chunks) : (n += 1) {
+        const end = if (n == n_chunks - 1) handlers.len else offset + chunk_size;
+        chunks[n] = .{
+            .handlers = handlers[offset..end],
+            .record = record,
+            .results = results[offset..end],
+        };
+        batch[n] = .{ .task_fn = multiHandlerChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        offset = end;
+    }
+
     const pool = getPool();
-    const ctx = MultiHandlerDispatchContext{
-        .handlers = handlers,
-        .record = record,
-        .results = results,
-    };
-    _ = pool.call(void, multiHandlerDispatchTask, ctx);
-}
-
-fn multiHandlerDispatchTask(t: *spice.Task, ctx: MultiHandlerDispatchContext) void {
-    const handlers = ctx.handlers;
-    const results = ctx.results;
-
-    if (handlers.len < 2) {
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         for (handlers, 0..) |h, i| {
-            h.handle(ctx.record) catch |err| {
+            h.handle(record) catch |err| {
                 results[i] = .{ .err = err };
                 continue;
             };
             results[i] = .{ .err = null };
         }
         return;
-    }
-
-    const mid = handlers.len / 2;
-    const left_ctx = MultiHandlerDispatchContext{
-        .handlers = handlers[0..mid],
-        .record = ctx.record,
-        .results = results[0..mid],
     };
-    const right_ctx = MultiHandlerDispatchContext{
-        .handlers = handlers[mid..],
-        .record = ctx.record,
-        .results = results[mid..],
-    };
-
-    var fut = spice.Future(MultiHandlerDispatchContext, void).init();
-    fut.fork(t, multiHandlerDispatchTask, right_ctx);
-
-    t.call(void, multiHandlerDispatchTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, multiHandlerDispatchTask, right_ctx);
-    }
+    wg.wait();
 }
 
 // ============================================================================
@@ -604,19 +566,30 @@ pub const MultiFlushResult = struct {
     err: ?HandlerError,
 };
 
-/// Context for parallel multi-handler flush.
-pub const MultiFlushContext = struct {
+/// Per-chunk context for parallel multi-handler flush.
+const MultiFlushChunk = struct {
     handlers: []const Handler,
     timeout_ms: u32,
     results: []MultiFlushResult,
 };
+
+fn multiFlushChunkTask(ctx_ptr: *anyopaque, _: *tp.TaskContext) void {
+    const chunk: *MultiFlushChunk = @ptrCast(@alignCast(ctx_ptr));
+    for (chunk.handlers, 0..) |h, i| {
+        h.flush(chunk.timeout_ms) catch |err| {
+            chunk.results[i] = .{ .err = err };
+            continue;
+        };
+        chunk.results[i] = .{ .err = null };
+    }
+}
 
 /// Flush multiple Handler instances in parallel.
 ///
 /// Each handler is flushed independently. Results are collected
 /// per-handler so the caller can inspect individual errors.
 ///
-/// Threshold: Uses parallel processing for 2+ handlers when spice is enabled.
+/// Threshold: Uses parallel processing for 2+ handlers.
 pub fn flushHandlers(
     handlers: []const Handler,
     timeout_ms: u32,
@@ -624,7 +597,7 @@ pub fn flushHandlers(
 ) void {
     std.debug.assert(handlers.len == results.len);
 
-    if (!true or handlers.len < 2) {
+    if (handlers.len < 2) {
         for (handlers, 0..) |h, i| {
             h.flush(timeout_ms) catch |err| {
                 results[i] = .{ .err = err };
@@ -635,49 +608,37 @@ pub fn flushHandlers(
         return;
     }
 
+    const n_chunks = @min(handlers.len, MAX_CHUNKS);
+    var chunks: [MAX_CHUNKS]MultiFlushChunk = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
+
+    const chunk_size = handlers.len / n_chunks;
+    var offset: usize = 0;
+    var n: usize = 0;
+    while (n < n_chunks) : (n += 1) {
+        const end = if (n == n_chunks - 1) handlers.len else offset + chunk_size;
+        chunks[n] = .{
+            .handlers = handlers[offset..end],
+            .timeout_ms = timeout_ms,
+            .results = results[offset..end],
+        };
+        batch[n] = .{ .task_fn = multiFlushChunkTask, .ctx = @ptrCast(&chunks[n]) };
+        offset = end;
+    }
+
     const pool = getPool();
-    const ctx = MultiFlushContext{
-        .handlers = handlers,
-        .timeout_ms = timeout_ms,
-        .results = results,
-    };
-    _ = pool.call(void, multiFlushTask, ctx);
-}
-
-fn multiFlushTask(t: *spice.Task, ctx: MultiFlushContext) void {
-    const handlers = ctx.handlers;
-    const results = ctx.results;
-
-    if (handlers.len < 2) {
+    var wg = pool.waitGroup();
+    _ = pool.submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         for (handlers, 0..) |h, i| {
-            h.flush(ctx.timeout_ms) catch |err| {
+            h.flush(timeout_ms) catch |err| {
                 results[i] = .{ .err = err };
                 continue;
             };
             results[i] = .{ .err = null };
         }
         return;
-    }
-
-    const mid = handlers.len / 2;
-    const left_ctx = MultiFlushContext{
-        .handlers = handlers[0..mid],
-        .timeout_ms = ctx.timeout_ms,
-        .results = results[0..mid],
     };
-    const right_ctx = MultiFlushContext{
-        .handlers = handlers[mid..],
-        .timeout_ms = ctx.timeout_ms,
-        .results = results[mid..],
-    };
-
-    var fut = spice.Future(MultiFlushContext, void).init();
-    fut.fork(t, multiFlushTask, right_ctx);
-
-    t.call(void, multiFlushTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, multiFlushTask, right_ctx);
-    }
+    wg.wait();
 }
 
 // ============================================================================
@@ -685,8 +646,6 @@ fn multiFlushTask(t: *spice.Task, ctx: MultiFlushContext) void {
 // ============================================================================
 
 test "parallel record format" {
-    // spice always enabled when this module is compiled
-
     const testFormatter = struct {
         fn format(input: RecordInput, buffer: []u8) FormattedRecord {
             const len = @min(input.message.len, buffer.len);
@@ -728,8 +687,6 @@ test "parallel record format" {
 }
 
 test "parallel handler dispatch" {
-    // spice always enabled when this module is compiled
-
     const TestHandler = struct {
         fn dispatch(ptr: *anyopaque, record_data: []const u8) DispatchResult {
             _ = ptr;
@@ -760,8 +717,6 @@ test "parallel handler dispatch" {
 }
 
 test "parallel handler dispatch - empty record" {
-    // spice always enabled when this module is compiled
-
     const TestHandler = struct {
         fn dispatch(ptr: *anyopaque, record_data: []const u8) DispatchResult {
             _ = ptr;
@@ -792,8 +747,6 @@ test "parallel handler dispatch - empty record" {
 }
 
 test "parallel sink write" {
-    // spice always enabled when this module is compiled
-
     const testWriter = struct {
         fn write(sink_ptr: *anyopaque, data: []const u8, flush: bool) WriteResult {
             _ = sink_ptr;
@@ -827,8 +780,6 @@ test "parallel sink write" {
 }
 
 test "parallel sink write - with flush" {
-    // spice always enabled when this module is compiled
-
     const testWriter = struct {
         fn write(sink_ptr: *anyopaque, data: []const u8, flush: bool) WriteResult {
             _ = sink_ptr;
@@ -860,8 +811,6 @@ test "parallel sink write - with flush" {
 }
 
 test "parallel batch flush" {
-    // spice always enabled when this module is compiled
-
     const testFlusher = struct {
         fn flush(sink_ptr: *anyopaque, timeout_ms: u32) FlushResult {
             _ = sink_ptr;
@@ -894,8 +843,6 @@ test "parallel batch flush" {
 }
 
 test "parallel batch flush - timeout" {
-    // spice always enabled when this module is compiled
-
     const testFlusher = struct {
         fn flush(sink_ptr: *anyopaque, timeout_ms: u32) FlushResult {
             _ = sink_ptr;
