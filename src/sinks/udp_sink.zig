@@ -29,30 +29,27 @@ pub const UdpOptions = struct {
 /// UDP sink context.
 pub const Context = struct {
     options: UdpOptions,
-    socket: ?std.posix.socket_t,
-    dest_addr: std.Io.net.Address,
+    socket: ?std.posix.fd_t,
+    dest_addr: std.Io.net.IpAddress,
     level: std.atomic.Value(i32),
     clock: Clock,
     mutex: std.Io.Mutex,
 
     pub fn init(options: UdpOptions, level: Level, clock: Clock) !Context {
         // Parse destination address
-        const dest_addr = std.Io.net.Address.parseIp4(options.host, options.port) catch blk: {
-            break :blk std.Io.net.Address.parseIp6(options.host, options.port) catch {
+        const dest_addr = std.Io.net.IpAddress.parseIp4(options.host, options.port) catch blk: {
+            break :blk std.Io.net.IpAddress.parseIp6(options.host, options.port) catch {
                 return error.InvalidAddress;
             };
         };
 
-        // Create UDP socket
-        const sock = std.posix.socket(
-            dest_addr.any.family,
-            std.posix.SOCK.DGRAM,
-            0,
-        ) catch return error.SocketError;
+        // Create UDP socket via Io.net connect with dgram mode
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const stream = dest_addr.connect(io, .{ .mode = .dgram }) catch return error.SocketError;
 
         return .{
             .options = options,
-            .socket = sock,
+            .socket = stream.socket.handle,
             .dest_addr = dest_addr,
             .level = std.atomic.Value(i32).init(@intFromEnum(level)),
             .clock = clock,
@@ -65,7 +62,7 @@ pub const Context = struct {
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.socket) |s| {
-            std.posix.close(s);
+            _ = std.os.linux.close(s);
             self.socket = null;
         }
     }
@@ -78,9 +75,10 @@ pub const Context = struct {
                 metrics.global.incDropped(1);
                 return;
             }
-            _ = std.posix.sendto(sock, data, 0, &self.dest_addr.any, self.dest_addr.getOsSockLen()) catch {
+            const rc = std.os.linux.sendto(sock, data.ptr, data.len, 0, @ptrCast(&self.dest_addr), @sizeOf(@TypeOf(self.dest_addr)));
+            if (rc > std.math.maxInt(isize)) {
                 return error.WriteFailed;
-            };
+            }
             metrics.global.addBytesWritten(data.len);
         }
     }

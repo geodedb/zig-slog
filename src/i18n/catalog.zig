@@ -30,7 +30,7 @@ pub const Catalog = struct {
         return .{
             .allocator = allocator,
             .translations = std.StringHashMap(std.StringHashMap([]const u8)).init(allocator),
-            .owned_strings = .{},
+            .owned_strings = .empty,
         };
     }
 

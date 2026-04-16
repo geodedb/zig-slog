@@ -63,29 +63,21 @@ pub const Context = struct {
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.stream) |s| {
-            s.close();
+            s.close(std.Io.Threaded.global_single_threaded.io());
             self.stream = null;
         }
     }
 
     fn connect(self: *Context) !void {
         if (self.stream != null) return;
+        const io = std.Io.Threaded.global_single_threaded.io();
 
-        // Fast path: try parsing as literal IPv4 or IPv6 address
-        if (std.Io.net.Address.parseIp4(self.options.host, self.options.port)) |address| {
-            self.stream = std.Io.net.tcpConnectToAddress(address) catch return error.ConnectionFailed;
-            self.applySocketTimeouts();
-            return;
-        } else |_| {}
-
-        if (std.Io.net.Address.parseIp6(self.options.host, self.options.port)) |addr| {
-            self.stream = std.Io.net.tcpConnectToAddress(addr) catch return error.ConnectionFailed;
-            self.applySocketTimeouts();
-            return;
-        } else |_| {}
-
-        // Slow path: resolve hostname via DNS using tcpConnectToHost
-        self.stream = std.Io.net.tcpConnectToHost(self.allocator, self.options.host, self.options.port) catch return error.ConnectionFailed;
+        // Try parsing as literal IPv4 or IPv6 address and connect
+        const address = std.Io.net.IpAddress.parseIp4(self.options.host, self.options.port) catch
+            std.Io.net.IpAddress.parseIp6(self.options.host, self.options.port) catch
+            std.Io.net.IpAddress.resolve(io, self.options.host, self.options.port) catch
+            return error.ConnectionFailed;
+        self.stream = address.connect(io, .{ .mode = .stream }) catch return error.ConnectionFailed;
         self.applySocketTimeouts();
     }
 
@@ -97,21 +89,25 @@ pub const Context = struct {
                 .sec = @intCast(timeout_ms / 1000),
                 .usec = @intCast((timeout_ms % 1000) * 1000),
             };
-            std.posix.setsockopt(s.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeval)) catch {};
-            std.posix.setsockopt(s.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeval)) catch {};
+            std.posix.setsockopt(s.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeval)) catch {};
+            std.posix.setsockopt(s.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeval)) catch {};
         }
     }
 
     fn disconnect(self: *Context) void {
         if (self.stream) |s| {
-            s.close();
+            s.close(std.Io.Threaded.global_single_threaded.io());
             self.stream = null;
         }
     }
 
     fn writeWithRetry(self: *Context, data: []const u8) !void {
         // Circuit breaker: fast-fail during cooldown period
-        const now = std.time.milliTimestamp();
+        const now = blk: {
+            var ts: std.os.linux.timespec = undefined;
+            const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+            break :blk if (rc == 0) @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000) else 0;
+        };
         if (self.consecutive_failures >= circuit_breaker_threshold and now < self.circuit_open_until) {
             return error.WriteFailed;
         }
@@ -124,7 +120,7 @@ pub const Context = struct {
             const was_disconnected = self.stream == null;
             self.connect() catch {
                 if (attempts < self.options.max_retries) {
-                    std.Thread.sleep(@as(u64, backoff) * std.time.ns_per_ms);
+                    { const sio = std.Io.Threaded.global_single_threaded.io(); sio.sleep(std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff))), .awake) catch {}; }
                     backoff = @min(backoff * 2, self.options.max_backoff_ms);
                     continue;
                 }
@@ -138,10 +134,12 @@ pub const Context = struct {
 
             // Try to write
             if (self.stream) |s| {
-                _ = s.write(data) catch {
+                var wbuf: [4096]u8 = undefined;
+                var w = s.writer(std.Io.Threaded.global_single_threaded.io(), &wbuf);
+                w.interface.writeAll(data) catch {
                     self.disconnect();
                     if (attempts < self.options.max_retries) {
-                        std.Thread.sleep(@as(u64, backoff) * std.time.ns_per_ms);
+                        { const sio = std.Io.Threaded.global_single_threaded.io(); sio.sleep(std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff))), .awake) catch {}; }
                         backoff = @min(backoff * 2, self.options.max_backoff_ms);
                         continue;
                     }
@@ -157,7 +155,11 @@ pub const Context = struct {
 
         self.consecutive_failures += 1;
         if (self.consecutive_failures >= circuit_breaker_threshold) {
-            self.circuit_open_until = std.time.milliTimestamp() + circuit_cooldown_ms;
+            self.circuit_open_until = blk: {
+            var ts: std.os.linux.timespec = undefined;
+            const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+            break :blk if (rc == 0) @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000) else 0;
+        } + circuit_cooldown_ms;
         }
         return error.WriteFailed;
     }

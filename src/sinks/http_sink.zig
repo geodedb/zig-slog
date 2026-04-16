@@ -111,7 +111,8 @@ pub const Context = struct {
             }
 
             if (attempt < self.options.max_retries) {
-                std.Thread.sleep(@as(u64, backoff) * std.time.ns_per_ms);
+                const io = std.Io.Threaded.global_single_threaded.io();
+                io.sleep(std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff))), .awake) catch {};
                 backoff = @min(backoff * 2, self.options.max_backoff_ms);
             }
         }
@@ -121,12 +122,13 @@ pub const Context = struct {
     }
 
     fn sendHttp(self: *Context, data: []const u8) bool {
-        // Connect: fast path for literal IP, slow path with DNS resolution
-        const stream = if (std.Io.net.Address.parseIp4(self.host, self.port)) |address|
-            std.Io.net.tcpConnectToAddress(address) catch return false
-        else |_|
-            std.Io.net.tcpConnectToHost(self.allocator, self.host, self.port) catch return false;
-        defer stream.close();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        // Connect: try parsing as literal IP then resolve hostname
+        const address = std.Io.net.IpAddress.parseIp4(self.host, self.port) catch
+            std.Io.net.IpAddress.parseIp6(self.host, self.port) catch
+            std.Io.net.IpAddress.resolve(io, self.host, self.port) catch return false;
+        const stream = address.connect(io, .{ .mode = .stream }) catch return false;
+        defer stream.close(io);
 
         // Apply socket timeouts
         const timeout_ms = self.options.timeout_ms;
@@ -134,8 +136,8 @@ pub const Context = struct {
             .sec = @intCast(timeout_ms / 1000),
             .usec = @intCast((timeout_ms % 1000) * 1000),
         };
-        std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeval)) catch {};
-        std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeval)) catch {};
+        std.posix.setsockopt(stream.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeval)) catch {};
+        std.posix.setsockopt(stream.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeval)) catch {};
 
         // Build HTTP request
         var req_buf: [1024]u8 = undefined;
@@ -147,27 +149,36 @@ pub const Context = struct {
             data.len,
         }) catch return false;
 
+        // Create a writer for the stream
+        var wbuf: [4096]u8 = undefined;
+        var w = stream.writer(io, &wbuf);
+
         // Send header
-        _ = stream.write(req_header) catch return false;
+        w.interface.writeAll(req_header) catch return false;
 
         // Send custom headers (skip any with control characters to prevent injection)
         for (self.options.headers) |header| {
             if (containsControlChars(header.name) or containsControlChars(header.value)) continue;
-            _ = stream.write(header.name) catch return false;
-            _ = stream.write(": ") catch return false;
-            _ = stream.write(header.value) catch return false;
-            _ = stream.write("\r\n") catch return false;
+            w.interface.writeAll(header.name) catch return false;
+            w.interface.writeAll(": ") catch return false;
+            w.interface.writeAll(header.value) catch return false;
+            w.interface.writeAll("\r\n") catch return false;
         }
 
         // End headers
-        _ = stream.write("\r\n") catch return false;
+        w.interface.writeAll("\r\n") catch return false;
 
         // Send body
-        _ = stream.write(data) catch return false;
+        w.interface.writeAll(data) catch return false;
+
+        // Flush the writer
+        w.interface.flush() catch return false;
 
         // Read response (simplified - just check status)
         var resp_buf: [256]u8 = undefined;
-        const n = stream.read(&resp_buf) catch return false;
+        var rbuf: [256]u8 = undefined;
+        var r = stream.reader(io, &rbuf);
+        const n = r.interface.readSliceShort(&resp_buf) catch return false;
         if (n < 12) return false;
 
         // Check for 2xx status at the correct position in the HTTP status line.

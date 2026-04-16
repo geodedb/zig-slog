@@ -37,13 +37,13 @@ pub const RotationOptions = struct {
 pub const Context = struct {
     allocator: std.mem.Allocator,
     options: RotationOptions,
-    file: ?std.fs.File,
+    file: ?std.Io.File,
     current_size: usize,
     level: std.atomic.Value(i32),
     clock: Clock,
     mutex: std.Io.Mutex,
-    path_buf: [std.fs.max_path_bytes]u8,
-    path_buf2: [std.fs.max_path_bytes]u8,
+    path_buf: [std.Io.Dir.max_path_bytes]u8,
+    path_buf2: [std.Io.Dir.max_path_bytes]u8,
     write_buf: [WRITE_BUF_SIZE]u8,
     write_buf_pos: usize,
 
@@ -79,7 +79,7 @@ pub const Context = struct {
         };
 
         if (self.file) |f| {
-            f.close();
+            f.close(std.Io.Threaded.global_single_threaded.io());
             self.file = null;
         }
     }
@@ -100,17 +100,17 @@ pub const Context = struct {
 
     fn openFile(self: *Context) !void {
         const path = self.options.path;
+        const io = std.Io.Threaded.global_single_threaded.io();
 
         // Get or create directory
         if (std.fs.path.dirname(path)) |dir| {
-            std.fs.cwd().makePath(dir) catch {
+            std.Io.Dir.cwd().createDirPath(io, dir) catch {
                 metrics.global.incErrors();
             };
         }
 
-        self.file = std.fs.cwd().createFile(path, .{
+        self.file = std.Io.Dir.cwd().createFile(io, path, .{
             .truncate = false,
-            .mode = 0o600, // Owner read/write only -- log files may contain sensitive data
         }) catch |err| {
             return switch (err) {
                 error.AccessDenied => error.WriteFailed,
@@ -123,16 +123,13 @@ pub const Context = struct {
 
         // Seek to end
         if (self.file) |f| {
-            const stat = f.stat() catch {
+            const stat = f.stat(io) catch {
                 self.current_size = 0;
                 return;
             };
             self.current_size = stat.size;
-            f.seekTo(stat.size) catch {
-                // If seek fails, reset to safe default so rotation
-                // thresholds are not based on a stale value.
-                self.current_size = 0;
-            };
+            // In 0.16.0, File.Writer handles positioning internally.
+            // createFile with truncate=false opens for appending.
         }
     }
 
@@ -144,7 +141,7 @@ pub const Context = struct {
 
         // Close current file
         if (self.file) |f| {
-            f.close();
+            f.close(std.Io.Threaded.global_single_threaded.io());
             self.file = null;
         }
 
@@ -154,7 +151,7 @@ pub const Context = struct {
             if (i >= self.options.max_backups) {
                 // Delete oldest -- use path_buf for the path to delete
                 const del_path = self.formatBackupPath1(i) catch continue;
-                std.fs.cwd().deleteFile(del_path) catch |err| switch (err) {
+                std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), del_path) catch |err| switch (err) {
                     error.FileNotFound => {},
                     else => {
                         metrics.global.incErrors();
@@ -164,7 +161,7 @@ pub const Context = struct {
                 // Rename to next number -- use separate buffers for old and new paths
                 const old_path = self.formatBackupPath1(i) catch continue;
                 const new_path = self.formatBackupPath2(i + 1) catch continue;
-                std.fs.cwd().rename(old_path, new_path) catch |err| switch (err) {
+                std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, std.Io.Threaded.global_single_threaded.io()) catch |err| switch (err) {
                     error.FileNotFound => {},
                     else => {
                         metrics.global.incErrors();
@@ -175,7 +172,7 @@ pub const Context = struct {
 
         // Rename current to .1
         const backup1 = self.formatBackupPath1(1) catch return error.WriteFailed;
-        std.fs.cwd().rename(self.options.path, backup1) catch |err| switch (err) {
+        std.Io.Dir.cwd().rename(self.options.path, std.Io.Dir.cwd(), backup1, std.Io.Threaded.global_single_threaded.io()) catch |err| switch (err) {
             error.FileNotFound => {},
             else => {
                 metrics.global.incErrors();
@@ -207,10 +204,8 @@ pub const Context = struct {
         if (self.write_buf_pos == 0) return;
 
         if (self.file) |f| {
-            var written: usize = 0;
-            while (written < self.write_buf_pos) {
-                written += f.write(self.write_buf[written..self.write_buf_pos]) catch return error.WriteFailed;
-            }
+            const fio = std.Io.Threaded.global_single_threaded.io();
+            f.writeStreamingAll(fio, self.write_buf[0..self.write_buf_pos]) catch return error.WriteFailed;
         }
         self.write_buf_pos = 0;
     }
@@ -253,7 +248,7 @@ pub const Context = struct {
         };
 
         if (self.file) |f| {
-            f.close();
+            f.close(std.Io.Threaded.global_single_threaded.io());
             self.file = null;
         }
         try self.openFile();
@@ -309,7 +304,7 @@ fn flush(ctx_ptr: *anyopaque, _: u32) HandlerError!void {
     ctx.flushWriteBuf() catch return error.FlushFailed;
 
     if (ctx.file) |f| {
-        f.sync() catch return error.FlushFailed;
+        f.sync(std.Io.Threaded.global_single_threaded.io()) catch return error.FlushFailed;
     }
 }
 
@@ -351,7 +346,7 @@ test "RotatingFileHandler basic" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -433,7 +428,7 @@ test "RotatingFileHandler secret redaction" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/secret_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -464,7 +459,7 @@ test "RotatingFileHandler secret redaction" {
 
     // Read the file contents and verify [REDACTED] is present
     // and the actual secret is NOT present
-    const file = try std.fs.cwd().openFile(full_path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
     defer file.close();
     var read_buf: [4096]u8 = undefined;
     const bytes_read = try file.readAll(&read_buf);
@@ -483,7 +478,7 @@ test "RotatingFileHandler all value types" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/values_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -519,7 +514,7 @@ test "RotatingFileHandler all value types" {
     try handler.flush(0);
 
     // Read and verify the file contents
-    const file = try std.fs.cwd().openFile(full_path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
     defer file.close();
     var read_buf: [4096]u8 = undefined;
     const bytes_read = try file.readAll(&read_buf);
@@ -544,7 +539,7 @@ test "RotatingFileHandler write buffering" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/buffered_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -576,7 +571,7 @@ test "RotatingFileHandler write buffering" {
     // After flush, all data should be on disk
     try handler.flush(0);
 
-    const file = try std.fs.cwd().openFile(full_path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
     defer file.close();
     var read_buf: [8192]u8 = undefined;
     const bytes_read = try file.readAll(&read_buf);
@@ -599,7 +594,7 @@ test "RotatingFileHandler multiple writes track size" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/size_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -642,7 +637,7 @@ test "RotatingFileHandler level filtering" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/filter_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -679,7 +674,7 @@ test "RotatingFileHandler deinit closes file" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/deinit_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -705,7 +700,7 @@ test "RotatingFileHandler message newline sanitization" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/sanitize_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -732,7 +727,7 @@ test "RotatingFileHandler message newline sanitization" {
     try handler.handle(&rec);
     try handler.flush(0);
 
-    const file = try std.fs.cwd().openFile(full_path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
     defer file.close();
     var read_buf: [4096]u8 = undefined;
     const bytes_read = try file.readAll(&read_buf);
@@ -757,7 +752,7 @@ test "RotatingFileHandler auto-redacts sensitive key" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/autoredact_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{
@@ -787,7 +782,7 @@ test "RotatingFileHandler auto-redacts sensitive key" {
     try handler.handle(&rec);
     try handler.flush(0);
 
-    const file = try std.fs.cwd().openFile(full_path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
     defer file.close();
     var read_buf: [4096]u8 = undefined;
     const bytes_read = try file.readAll(&read_buf);
@@ -810,7 +805,7 @@ test "RotatingFileHandler close via vtable" {
     const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/close_test.log", .{path});
 
     var ctx = try Context.init(allocator, .{

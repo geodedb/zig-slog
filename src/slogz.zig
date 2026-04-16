@@ -129,9 +129,16 @@ pub const HttpOptions = http_sink.HttpOptions;
 /// The caller provides a pointer to a `text.Context` which is initialized
 /// in place, avoiding dangling pointers. The returned `Handler` references
 /// the caller-owned context, so `ctx` must outlive the handler.
+/// Static stderr writer buffer and file writer instance.
+var stderr_writer_buf: [4096]u8 = undefined;
+var stderr_file_writer: std.Io.File.Writer = std.Io.File.stderr().writer(
+    std.Io.Threaded.global_single_threaded.io(),
+    &stderr_writer_buf,
+);
+
 pub fn stderrHandler(ctx: *text.Context, level: Level) Handler {
     ctx.* = text.Context.init(
-        std.fs.File.stderr().deprecatedWriter().any(),
+        &stderr_file_writer.interface,
         level,
         Clock.system(),
     );
@@ -145,7 +152,7 @@ pub fn stderrHandler(ctx: *text.Context, level: Level) Handler {
 /// the caller-owned context, so `ctx` must outlive the handler.
 pub fn stderrJsonHandler(ctx: *json.Context, level: Level) Handler {
     ctx.* = json.Context.init(
-        std.fs.File.stderr().deprecatedWriter().any(),
+        &stderr_file_writer.interface,
         level,
         Clock.system(),
     );

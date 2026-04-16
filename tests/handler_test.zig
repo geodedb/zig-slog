@@ -94,9 +94,9 @@ test "DiscardHandler - withGroup returns handler" {
 
 test "TextHandler - level filtering" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .warn, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .warn, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     // Debug should be filtered
@@ -110,7 +110,7 @@ test "TextHandler - level filtering" {
         .source_line = 0,
         .attrs = &.{},
     });
-    try std.testing.expectEqual(@as(usize, 0), fbs.getWritten().len);
+    try std.testing.expectEqual(@as(usize, 0), fbs.buffered().len);
 
     // Warn should pass
     try handler.handle(&Record{
@@ -123,14 +123,14 @@ test "TextHandler - level filtering" {
         .source_line = 0,
         .attrs = &.{},
     });
-    try std.testing.expect(fbs.getWritten().len > 0);
+    try std.testing.expect(fbs.buffered().len > 0);
 }
 
 test "TextHandler - all value types" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     const rec = Record{
@@ -155,7 +155,7 @@ test "TextHandler - all value types" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "str=hello") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "int=-42") != null);
@@ -171,9 +171,9 @@ test "TextHandler - all value types" {
 
 test "TextHandler - quoted strings with spaces" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     const rec = Record{
@@ -191,7 +191,7 @@ test "TextHandler - quoted strings with spaces" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "path=\"hello world\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "eq=\"key=value\"") != null);
@@ -199,9 +199,9 @@ test "TextHandler - quoted strings with spaces" {
 
 test "TextHandler - special float values" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     const rec = Record{
@@ -219,7 +219,7 @@ test "TextHandler - special float values" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // NaN and Inf should be rendered as null
     try std.testing.expect(std.mem.indexOf(u8, output, "nan=null") != null);
@@ -228,9 +228,9 @@ test "TextHandler - special float values" {
 
 test "TextHandler - dynamic level change" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .@"error", Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .@"error", Clock.system());
     const handler = slogz.text.init(&ctx);
 
     // Info should be filtered at error level
@@ -244,7 +244,7 @@ test "TextHandler - dynamic level change" {
         .source_line = 0,
         .attrs = &.{},
     });
-    try std.testing.expectEqual(@as(usize, 0), fbs.getWritten().len);
+    try std.testing.expectEqual(@as(usize, 0), fbs.buffered().len);
 
     // Change level to info
     handler.setLevel(.info);
@@ -260,7 +260,7 @@ test "TextHandler - dynamic level change" {
         .source_line = 0,
         .attrs = &.{},
     });
-    try std.testing.expect(fbs.getWritten().len > 0);
+    try std.testing.expect(fbs.buffered().len > 0);
 }
 
 // ============================================================================
@@ -269,9 +269,9 @@ test "TextHandler - dynamic level change" {
 
 test "JSONHandler - valid JSON output" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -289,7 +289,7 @@ test "JSONHandler - valid JSON output" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Verify starts with { and ends with }\n
     try std.testing.expect(output.len > 0);
@@ -300,9 +300,9 @@ test "JSONHandler - valid JSON output" {
 
 test "JSONHandler - level filtering" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .@"error", Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .@"error", Clock.system());
     const handler = slogz.json.init(&ctx);
 
     try handler.handle(&Record{
@@ -316,14 +316,14 @@ test "JSONHandler - level filtering" {
         .attrs = &.{},
     });
 
-    try std.testing.expectEqual(@as(usize, 0), fbs.getWritten().len);
+    try std.testing.expectEqual(@as(usize, 0), fbs.buffered().len);
 }
 
 test "JSONHandler - escape special characters" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -338,7 +338,7 @@ test "JSONHandler - escape special characters" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\\t") != null);
@@ -348,9 +348,9 @@ test "JSONHandler - escape special characters" {
 
 test "JSONHandler - control character escaping" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -365,7 +365,7 @@ test "JSONHandler - control character escaping" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Control chars should be escaped as \uXXXX
     try std.testing.expect(std.mem.indexOf(u8, output, "\\u") != null);
@@ -373,9 +373,9 @@ test "JSONHandler - control character escaping" {
 
 test "JSONHandler - all value types" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -397,7 +397,7 @@ test "JSONHandler - all value types" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"str\":\"hello\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"int\":-42") != null);
@@ -409,9 +409,9 @@ test "JSONHandler - all value types" {
 
 test "JSONHandler - no source info when empty" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -426,7 +426,7 @@ test "JSONHandler - no source info when empty" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Should not have source when source_file is empty
     try std.testing.expect(std.mem.indexOf(u8, output, "\"source\"") == null);
@@ -434,9 +434,9 @@ test "JSONHandler - no source info when empty" {
 
 test "JSONHandler - with source info" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -451,7 +451,7 @@ test "JSONHandler - with source info" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"source_file\":\"main.zig\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"source_line\":100") != null);
@@ -463,11 +463,11 @@ test "JSONHandler - with source info" {
 
 test "SyslogHandler - PRI calculation" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     // local0 = 16, info severity = 6
     // PRI = 16 * 8 + 6 = 134
-    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+    var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
         .facility = .local0,
         .hostname = "testhost",
     });
@@ -484,17 +484,17 @@ test "SyslogHandler - PRI calculation" {
         .attrs = &.{},
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.startsWith(u8, output, "<134>1 "));
 }
 
 test "SyslogHandler - error level PRI" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
     // local0 = 16, error severity = 3
     // PRI = 16 * 8 + 3 = 131
-    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+    var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
         .facility = .local0,
         .hostname = "testhost",
     });
@@ -511,15 +511,15 @@ test "SyslogHandler - error level PRI" {
         .attrs = &.{},
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.startsWith(u8, output, "<131>1 "));
 }
 
 test "SyslogHandler - structured data escaping" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+    var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
         .hostname = "host",
     });
     const handler = slogz.syslog.init(&ctx);
@@ -538,7 +538,7 @@ test "SyslogHandler - structured data escaping" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // RFC5424 requires escaping: \ " ]
     try std.testing.expect(std.mem.indexOf(u8, output, "\\\"") != null);
@@ -548,9 +548,9 @@ test "SyslogHandler - structured data escaping" {
 
 test "SyslogHandler - control character escaping in SD values" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+    var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
         .hostname = "host",
     });
     const handler = slogz.syslog.init(&ctx);
@@ -569,7 +569,7 @@ test "SyslogHandler - control character escaping in SD values" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Control chars should be escaped as \xHH
     try std.testing.expect(std.mem.indexOf(u8, output, "\\x0a") != null); // \n
@@ -587,9 +587,9 @@ test "SyslogHandler - all facility types" {
 
     for (facilities) |facility| {
         var buf: [1024]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fbs: std.Io.Writer = .fixed(&buf);
 
-        var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+        var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
             .facility = facility,
             .hostname = "host",
         });
@@ -606,15 +606,15 @@ test "SyslogHandler - all facility types" {
             .attrs = &.{},
         });
 
-        try std.testing.expect(fbs.getWritten().len > 0);
+        try std.testing.expect(fbs.buffered().len > 0);
     }
 }
 
 test "SyslogHandler - procid included" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+    var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
         .hostname = "host",
         .procid = 12345,
     });
@@ -631,15 +631,15 @@ test "SyslogHandler - procid included" {
         .attrs = &.{},
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, " 12345 ") != null);
 }
 
 test "SyslogHandler - nilvalue for missing fields" {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+    var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
         .hostname = "-",
         .app_name = "-",
         .procid = null,
@@ -657,7 +657,7 @@ test "SyslogHandler - nilvalue for missing fields" {
         .attrs = &.{},
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     // Should have multiple NILVALUE markers
     try std.testing.expect(std.mem.indexOf(u8, output, "- - - -") != null);
 }
@@ -672,10 +672,10 @@ test "RotatingFileHandler - message newline sanitization" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/sanitize_test.log", .{path});
 
     var ctx = try slogz.rotating_file.Context.init(allocator, .{
@@ -702,10 +702,12 @@ test "RotatingFileHandler - message newline sanitization" {
     try handler.handle(&rec);
     try handler.flush(0);
 
-    const file = try std.fs.cwd().openFile(full_path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var read_buf: [4096]u8 = undefined;
-    const bytes_read = try file.readAll(&read_buf);
+    var file_rbuf: [4096]u8 = undefined;
+    var file_reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &file_rbuf);
+    const bytes_read = file_reader.interface.readSliceShort(&read_buf) catch 0;
     const contents = read_buf[0..bytes_read];
 
     // Newline in message should be escaped, not a raw newline
@@ -724,10 +726,10 @@ test "RotatingFileHandler - auto-redacts sensitive key" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/autoredact_test.log", .{path});
 
     var ctx = try slogz.rotating_file.Context.init(allocator, .{
@@ -757,10 +759,12 @@ test "RotatingFileHandler - auto-redacts sensitive key" {
     try handler.handle(&rec);
     try handler.flush(0);
 
-    const file = try std.fs.cwd().openFile(full_path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var read_buf: [4096]u8 = undefined;
-    const bytes_read = try file.readAll(&read_buf);
+    var file_rbuf: [4096]u8 = undefined;
+    var file_reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &file_rbuf);
+    const bytes_read = file_reader.interface.readSliceShort(&read_buf) catch 0;
     const contents = read_buf[0..bytes_read];
 
     // "password" key should be auto-redacted
@@ -776,10 +780,10 @@ test "RotatingFileHandler - close via vtable" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
-    var full_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const full_path = try std.fmt.bufPrint(&full_path_buf, "{s}/close_test.log", .{path});
 
     var ctx = try slogz.rotating_file.Context.init(allocator, .{
@@ -828,9 +832,9 @@ test "Handler - vtable consistency" {
 test "Handler - polymorphic behavior" {
     // Test that different handlers can be used interchangeably
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var text_ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var text_ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handlers = [_]Handler{
         slogz.discardHandler(),
         slogz.text.init(&text_ctx),

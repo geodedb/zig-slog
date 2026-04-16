@@ -18,9 +18,9 @@ const Clock = slogz.Clock;
 
 test "TextHandler output format" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     const rec = Record{
@@ -38,7 +38,7 @@ test "TextHandler output format" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Verify format: TIMESTAMP LEVEL logger message key=value ...
     try std.testing.expect(std.mem.indexOf(u8, output, "2025-01-02T03:04:05.000000Z") != null);
@@ -51,9 +51,9 @@ test "TextHandler output format" {
 
 test "TextHandler level filtering" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .warn, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .warn, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     // Debug should be filtered
@@ -92,7 +92,7 @@ test "TextHandler level filtering" {
         .attrs = &.{},
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "debug message") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "info message") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "warn message") != null);
@@ -104,9 +104,9 @@ test "TextHandler level filtering" {
 
 test "JSONHandler output format" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -124,7 +124,7 @@ test "JSONHandler output format" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // Verify JSON structure
     try std.testing.expect(std.mem.indexOf(u8, output, "\"time\":\"2025-01-02T03:04:05.000000Z\"") != null);
@@ -139,9 +139,9 @@ test "JSONHandler output format" {
 
 test "JSONHandler escaping" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     try handler.handle(&Record{
@@ -155,7 +155,7 @@ test "JSONHandler escaping" {
         .attrs = &.{},
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "\\\"quoted\\\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\\n") != null);
 }
@@ -166,9 +166,9 @@ test "JSONHandler escaping" {
 
 test "Secret redaction in TextHandler" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     try handler.handle(&Record{
@@ -185,7 +185,7 @@ test "Secret redaction in TextHandler" {
         },
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "alice") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, slogz.redact.REDACTED) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "super_secret_password") == null);
@@ -193,9 +193,9 @@ test "Secret redaction in TextHandler" {
 
 test "Secret redaction in JSONHandler" {
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     try handler.handle(&Record{
@@ -211,7 +211,7 @@ test "Secret redaction in JSONHandler" {
         },
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, slogz.redact.REDACTED) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "sk-1234567890abcdef") == null);
 }
@@ -222,9 +222,9 @@ test "Secret redaction in JSONHandler" {
 
 test "SyslogHandler RFC5424 format" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.syslog.Context.init(fbs.writer().any(), .info, Clock.system(), .{
+    var ctx = slogz.syslog.Context.init(&fbs, .info, Clock.system(), .{
         .facility = .local0,
         .hostname = "localhost",
         .app_name = "myapp",
@@ -246,7 +246,7 @@ test "SyslogHandler RFC5424 format" {
     };
 
     try handler.handle(&rec);
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
 
     // PRI for local0.info = 16*8 + 6 = 134
     try std.testing.expect(std.mem.startsWith(u8, output, "<134>1 "));
@@ -273,9 +273,9 @@ test "SyslogHandler severity mapping" {
 
 test "Logger with text handler" {
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     var logger = Logger.init(handler, .info, Clock.system()).named("myapp");
@@ -287,7 +287,7 @@ test "Logger with text handler" {
         Attr.int("duration_ms", 42),
     });
 
-    const output = fbs.getWritten();
+    const output = fbs.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "myapp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "request.handled") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "method=GET") != null);
@@ -326,9 +326,9 @@ test "Metrics tracking" {
 
     // Handle a record
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     try handler.handle(&Record{
