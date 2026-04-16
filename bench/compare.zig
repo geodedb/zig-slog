@@ -13,6 +13,10 @@
 
 const std = @import("std");
 
+fn getIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 const Metric = struct {
     name: []const u8,
     json_key: []const u8,
@@ -43,9 +47,12 @@ const TierValues = struct {
 };
 
 fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    return try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    const io = getIo();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var read_buf: [8192]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    return try reader.interface.readAlloc(allocator, 10 * 1024 * 1024);
 }
 
 const MAX_TIERS = 16;
@@ -144,39 +151,57 @@ fn extractIntValue(obj: []const u8, key: []const u8) ?i64 {
     return std.fmt.parseInt(i64, obj[val_start..val_end], 10) catch null;
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init.Minimal) !void {
+    const io = getIo();
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    // Parse args
+    var args_iter = std.process.Args.Iterator.init(init.args);
+    _ = args_iter.next(); // skip program name
 
-    if (args.len < 3) {
-        const stderr = std.fs.File.stderr().deprecatedWriter();
+    const baseline_path = args_iter.next() orelse {
+        var stderr_buf: [4096]u8 = undefined;
+        var stderr_fw = std.Io.File.stderr().writer(io, &stderr_buf);
+        const stderr = &stderr_fw.interface;
         try stderr.print("Usage: compare-bench <baseline.json> <current.json> [threshold_pct]\n", .{});
         try stderr.print("\nCompares benchmark results and detects regressions.\n", .{});
         try stderr.print("Default threshold: 20%%\n", .{});
+        try stderr.flush();
         std.process.exit(2);
-    }
+    };
 
-    const baseline_path = args[1];
-    const current_path = args[2];
-    const threshold: f64 = if (args.len > 3)
-        std.fmt.parseFloat(f64, args[3]) catch 20.0
+    const current_path = args_iter.next() orelse {
+        var stderr_buf: [4096]u8 = undefined;
+        var stderr_fw = std.Io.File.stderr().writer(io, &stderr_buf);
+        const stderr = &stderr_fw.interface;
+        try stderr.print("Usage: compare-bench <baseline.json> <current.json> [threshold_pct]\n", .{});
+        try stderr.flush();
+        std.process.exit(2);
+    };
+
+    const threshold: f64 = if (args_iter.next()) |threshold_arg|
+        std.fmt.parseFloat(f64, threshold_arg) catch 20.0
     else
         20.0;
 
     const baseline_content = readFile(allocator, baseline_path) catch |err| {
-        const stderr = std.fs.File.stderr().deprecatedWriter();
+        var stderr_buf: [4096]u8 = undefined;
+        var stderr_fw = std.Io.File.stderr().writer(io, &stderr_buf);
+        const stderr = &stderr_fw.interface;
         try stderr.print("Error reading baseline: {s}: {}\n", .{ baseline_path, err });
+        try stderr.flush();
         std.process.exit(2);
     };
     defer allocator.free(baseline_content);
 
     const current_content = readFile(allocator, current_path) catch |err| {
-        const stderr = std.fs.File.stderr().deprecatedWriter();
+        var stderr_buf: [4096]u8 = undefined;
+        var stderr_fw = std.Io.File.stderr().writer(io, &stderr_buf);
+        const stderr = &stderr_fw.interface;
         try stderr.print("Error reading current: {s}: {}\n", .{ current_path, err });
+        try stderr.flush();
         std.process.exit(2);
     };
     defer allocator.free(current_content);
@@ -184,7 +209,9 @@ pub fn main() !void {
     const baseline_tiers = extractTiers(baseline_content);
     const current_tiers = extractTiers(current_content);
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    var stdout_buf: [8192]u8 = undefined;
+    var stdout_fw = std.Io.File.stdout().writer(io, &stdout_buf);
+    const stdout = &stdout_fw.interface;
 
     try stdout.print("\n", .{});
     try stdout.print("================================================================================\n", .{});
@@ -253,9 +280,11 @@ pub fn main() !void {
     if (any_regression) {
         try stdout.print("  RESULT: REGRESSION DETECTED (threshold: {d:.0}%)\n", .{threshold});
         try stdout.print("================================================================================\n", .{});
+        try stdout.flush();
         std.process.exit(1);
     } else {
         try stdout.print("  RESULT: ALL PASS (threshold: {d:.0}%)\n", .{threshold});
         try stdout.print("================================================================================\n", .{});
+        try stdout.flush();
     }
 }

@@ -22,6 +22,10 @@ const Level = slogz.Level;
 const Clock = slogz.Clock;
 const Logger = slogz.Logger;
 
+fn getIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 // ============================================================================
 // Tier Configuration
 // ============================================================================
@@ -142,6 +146,11 @@ fn makeRecord(attr_count: usize) Record {
     };
 }
 
+fn elapsed_ns(start: std.Io.Timestamp, end: std.Io.Timestamp) u64 {
+    const dur = start.durationTo(end);
+    return @intCast(@max(dur.nanoseconds, 0));
+}
+
 fn benchHandler(
     handler: slogz.Handler,
     rec: *const Record,
@@ -150,31 +159,35 @@ fn benchHandler(
     comptime needs_reset: bool,
     fbs: anytype,
 ) struct { ns: u64, ops: u64 } {
+    const io = getIo();
+
     // Warmup
     for (0..warmup) |_| {
-        if (needs_reset) fbs.reset();
+        if (needs_reset) fbs.end = 0;
         handler.handle(rec) catch {};
     }
 
     // Benchmark
-    var timer = std.time.Timer.start() catch return .{ .ns = 0, .ops = 0 };
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..count) |_| {
-        if (needs_reset) fbs.reset();
+        if (needs_reset) fbs.end = 0;
         handler.handle(rec) catch {};
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
+    const total = elapsed_ns(start, end);
 
-    const ns_per_op = if (count > 0) elapsed_ns / count else 0;
+    const ns_per_op = if (count > 0) total / count else 0;
     const ops_per_sec = if (ns_per_op > 0) 1_000_000_000 / ns_per_op else 0;
 
     return .{ .ns = ns_per_op, .ops = ops_per_sec };
 }
 
 const NoopFbs = struct {
-    fn reset(_: *@This()) void {}
+    end: usize = 0,
 };
 
 fn runTier(tier: Tier) TierResult {
+    const io = getIo();
     const rec = makeRecord(tier.attr_count);
     const count = tier.message_count;
     const warmup = tier.warmup;
@@ -186,15 +199,15 @@ fn runTier(tier: Tier) TierResult {
 
     // --- Text handler ---
     var text_buf: [16384]u8 = undefined;
-    var text_fbs = std.io.fixedBufferStream(&text_buf);
-    var text_ctx = slogz.text.Context.init(text_fbs.writer().any(), .info, Clock.system());
+    var text_fbs: std.Io.Writer = .fixed(&text_buf);
+    var text_ctx = slogz.text.Context.init(&text_fbs, .info, Clock.system());
     const text_handler = slogz.text.init(&text_ctx);
     const text = benchHandler(text_handler, &rec, warmup, count, true, &text_fbs);
 
     // --- JSON handler ---
     var json_buf: [16384]u8 = undefined;
-    var json_fbs = std.io.fixedBufferStream(&json_buf);
-    var json_ctx = slogz.json.Context.init(json_fbs.writer().any(), .info, Clock.system());
+    var json_fbs: std.Io.Writer = .fixed(&json_buf);
+    var json_ctx = slogz.json.Context.init(&json_fbs, .info, Clock.system());
     const json_handler = slogz.json.init(&json_ctx);
     const json_r = benchHandler(json_handler, &rec, warmup, count, true, &json_fbs);
 
@@ -207,11 +220,12 @@ fn runTier(tier: Tier) TierResult {
             logger.info("bench.test", &.{Attr.string("key", "value")}) catch {};
         }
 
-        var timer = std.time.Timer.start() catch break :blk @as(u64, 0);
+        const start = std.Io.Timestamp.now(io, .awake);
         for (0..count) |_| {
             logger.info("bench.test", &.{Attr.string("key", "value")}) catch {};
         }
-        break :blk timer.read() / count;
+        const end = std.Io.Timestamp.now(io, .awake);
+        break :blk elapsed_ns(start, end) / count;
     };
 
     // --- Logger enabled ---
@@ -223,11 +237,12 @@ fn runTier(tier: Tier) TierResult {
             logger.info("bench.test", &.{Attr.string("key", "value")}) catch {};
         }
 
-        var timer = std.time.Timer.start() catch break :blk @as(u64, 0);
+        const start = std.Io.Timestamp.now(io, .awake);
         for (0..count) |_| {
             logger.info("bench.test", &.{Attr.string("key", "value")}) catch {};
         }
-        break :blk timer.read() / count;
+        const end = std.Io.Timestamp.now(io, .awake);
+        break :blk elapsed_ns(start, end) / count;
     };
 
     // --- Multi-handler (3 discard handlers) ---
@@ -244,12 +259,12 @@ fn runTier(tier: Tier) TierResult {
             mh.handle(&rec) catch {};
         }
 
-        var timer = std.time.Timer.start() catch break :blk @as(u64, 0);
+        const start = std.Io.Timestamp.now(io, .awake);
         for (0..count) |_| {
             mh.handle(&rec) catch {};
         }
-        const elapsed = timer.read();
-        const ns = elapsed / count;
+        const end = std.Io.Timestamp.now(io, .awake);
+        const ns = elapsed_ns(start, end) / count;
         break :blk ns;
     };
     const multi_ops = if (multi > 0) 1_000_000_000 / multi else 0;
@@ -272,16 +287,14 @@ fn runTier(tier: Tier) TierResult {
             ah.handle(&rec) catch {};
         }
 
-        var timer = std.time.Timer.start() catch {
-            async_ctx.deinit();
-            break :blk @as(u64, 0);
-        };
+        const start = std.Io.Timestamp.now(io, .awake);
         for (0..count) |_| {
             ah.handle(&rec) catch {};
         }
-        const elapsed = timer.read();
+        const end = std.Io.Timestamp.now(io, .awake);
+        const total = elapsed_ns(start, end);
         async_ctx.deinit();
-        break :blk elapsed / count;
+        break :blk total / count;
     };
     const async_ops = if (async_result > 0) 1_000_000_000 / async_result else 0;
 
@@ -294,11 +307,12 @@ fn runTier(tier: Tier) TierResult {
             slogz.rfc3339.formatTimestamp(&ts_buf, timestamp);
         }
 
-        var timer = std.time.Timer.start() catch break :blk @as(u64, 0);
+        const start = std.Io.Timestamp.now(io, .awake);
         for (0..count) |_| {
             slogz.rfc3339.formatTimestamp(&ts_buf, timestamp);
         }
-        break :blk timer.read() / count;
+        const end = std.Io.Timestamp.now(io, .awake);
+        break :blk elapsed_ns(start, end) / count;
     };
 
     // --- QueuedRecord serialization ---
@@ -308,12 +322,13 @@ fn runTier(tier: Tier) TierResult {
             std.mem.doNotOptimizeAway(&qr);
         }
 
-        var timer = std.time.Timer.start() catch break :blk @as(u64, 0);
+        const start = std.Io.Timestamp.now(io, .awake);
         for (0..count) |_| {
             const qr = slogz.queue.QueuedRecord.fromRecord(&rec);
             std.mem.doNotOptimizeAway(&qr);
         }
-        break :blk timer.read() / count;
+        const end = std.Io.Timestamp.now(io, .awake);
+        break :blk elapsed_ns(start, end) / count;
     };
 
     // --- Sensitive key check ---
@@ -329,13 +344,13 @@ fn runTier(tier: Tier) TierResult {
         std.mem.doNotOptimizeAway(&warm_sum);
 
         var sum: usize = 0;
-        var timer = std.time.Timer.start() catch break :blk @as(u64, 0);
+        const start = std.Io.Timestamp.now(io, .awake);
         for (0..count) |_| {
             for (keys) |key| sum += @intFromBool(slogz.redact.isSensitiveKey(key));
         }
-        const elapsed = timer.read();
+        const end = std.Io.Timestamp.now(io, .awake);
         std.mem.doNotOptimizeAway(&sum);
-        break :blk elapsed / count;
+        break :blk elapsed_ns(start, end) / count;
     };
 
     return .{
@@ -365,14 +380,17 @@ fn runTier(tier: Tier) TierResult {
 // ============================================================================
 
 fn writeJsonResults(results: []const TierResult) !void {
-    const w = std.fs.File.stdout().deprecatedWriter();
+    const io = getIo();
+    var stdout_buf: [8192]u8 = undefined;
+    var stdout_fw = std.Io.File.stdout().writer(io, &stdout_buf);
+    const w = &stdout_fw.interface;
 
     try w.print("{{\n", .{});
     try w.print("  \"version\": 1,\n", .{});
 
     // Timestamp
-    const ts = std.time.timestamp();
-    const epoch_secs: u64 = @intCast(ts);
+    const ts = std.Io.Timestamp.now(io, .real);
+    const epoch_secs: u64 = @intCast(@divTrunc(@as(i128, ts.nanoseconds), std.time.ns_per_s));
     const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
     const day = es.getEpochDay();
     const yd = day.calculateYearDay();
@@ -424,6 +442,7 @@ fn writeJsonResults(results: []const TierResult) !void {
 
     try w.print("  ]\n", .{});
     try w.print("}}\n", .{});
+    try w.flush();
 }
 
 // ============================================================================
@@ -431,7 +450,10 @@ fn writeJsonResults(results: []const TierResult) !void {
 // ============================================================================
 
 fn printSummary(results: []const TierResult) void {
-    const stderr = std.fs.File.stderr().deprecatedWriter();
+    const io = getIo();
+    var stderr_buf: [8192]u8 = undefined;
+    var stderr_fw = std.Io.File.stderr().writer(io, &stderr_buf);
+    const stderr = &stderr_fw.interface;
 
     stderr.print("\n", .{}) catch {};
     stderr.print("================================================================================\n", .{}) catch {};
@@ -504,23 +526,22 @@ fn printSummary(results: []const TierResult) void {
 
     stderr.print("\n", .{}) catch {};
     stderr.print("================================================================================\n", .{}) catch {};
+    stderr.flush() catch {};
 }
 
 // ============================================================================
 // Main
 // ============================================================================
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init.Minimal) !void {
+    var args_iter = std.process.Args.Iterator.init(init.args);
 
-    // Parse args for optional tier filter
-    const args = try std.process.argsAlloc(gpa.allocator());
-    defer std.process.argsFree(gpa.allocator(), args);
+    // skip program name
+    _ = args_iter.next();
 
     var tier_filter: ?[]const u8 = null;
-    if (args.len > 1) {
-        tier_filter = args[1];
+    if (args_iter.next()) |arg| {
+        tier_filter = arg;
     }
 
     var results_buf: [tiers.len]TierResult = undefined;
@@ -531,8 +552,14 @@ pub fn main() !void {
             if (!std.mem.eql(u8, tier.name, filter)) continue;
         }
 
-        const stderr = std.fs.File.stderr().deprecatedWriter();
-        stderr.print("  Running tier {s} ({s})...\n", .{ tier.name, tier.description }) catch {};
+        {
+            const stderr_io = getIo();
+            var stderr_buf: [4096]u8 = undefined;
+            var stderr_fw = std.Io.File.stderr().writer(stderr_io, &stderr_buf);
+            const stderr = &stderr_fw.interface;
+            stderr.print("  Running tier {s} ({s})...\n", .{ tier.name, tier.description }) catch {};
+            stderr.flush() catch {};
+        }
 
         results_buf[result_count] = runTier(tier);
         result_count += 1;
@@ -541,12 +568,16 @@ pub fn main() !void {
     const results = results_buf[0..result_count];
 
     if (result_count == 0) {
-        const stderr = std.fs.File.stderr().deprecatedWriter();
+        const stderr_io = getIo();
+        var stderr_buf: [4096]u8 = undefined;
+        var stderr_fw = std.Io.File.stderr().writer(stderr_io, &stderr_buf);
+        const stderr = &stderr_fw.interface;
         stderr.print("No tiers matched filter. Available: ", .{}) catch {};
         for (tiers) |tier| {
             stderr.print("{s} ", .{tier.name}) catch {};
         }
         stderr.print("\n", .{}) catch {};
+        stderr.flush() catch {};
         return;
     }
 

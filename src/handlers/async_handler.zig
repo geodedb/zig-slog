@@ -85,7 +85,7 @@ pub const Context = struct {
         self.running.store(false, .release);
 
         // Wake up worker thread
-        self.queue.not_empty.signal();
+        self.queue.not_empty.signal(std.Io.Threaded.global_single_threaded.io());
 
         // Wait for thread
         if (self.thread) |t| {

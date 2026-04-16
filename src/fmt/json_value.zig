@@ -81,7 +81,7 @@ fn testJsonValue(value: Value) ![]const u8 {
     const json = @import("json");
     var buf: [4096]u8 = undefined;
     var fbs: std.Io.Writer = .fixed(&buf);
-    var stack_buf: [128]u8 = undefined;
+    var stack_buf: [512]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&stack_buf);
     var enc = json.streamingEncoder(fba.allocator(), &fbs, .{});
     defer enc.deinit();

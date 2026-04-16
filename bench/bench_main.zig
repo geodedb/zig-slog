@@ -16,15 +16,22 @@ const Logger = slogz.Logger;
 const WARMUP_ITERATIONS = 1000;
 const BENCHMARK_ITERATIONS = 100_000;
 
+fn getIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 pub fn main() !void {
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const io = getIo();
+    var stdout_buf: [8192]u8 = undefined;
+    var stdout_fw = std.Io.File.stdout().writer(io, &stdout_buf);
+    const stdout = &stdout_fw.interface;
 
     try stdout.print("\n", .{});
-    try stdout.print("╔══════════════════════════════════════════════════════════════╗\n", .{});
-    try stdout.print("║                    slogz Benchmark Suite                     ║\n", .{});
-    try stdout.print("╠══════════════════════════════════════════════════════════════╣\n", .{});
-    try stdout.print("║  Iterations: {d:>10}                                      ║\n", .{BENCHMARK_ITERATIONS});
-    try stdout.print("╚══════════════════════════════════════════════════════════════╝\n", .{});
+    try stdout.print("==============================================================\n", .{});
+    try stdout.print("                    slogz Benchmark Suite                      \n", .{});
+    try stdout.print("==============================================================\n", .{});
+    try stdout.print("  Iterations: {d:>10}                                      \n", .{BENCHMARK_ITERATIONS});
+    try stdout.print("==============================================================\n", .{});
     try stdout.print("\n", .{});
 
     // Run benchmarks
@@ -41,9 +48,16 @@ pub fn main() !void {
 
     try stdout.print("\n", .{});
     try stdout.print("Benchmark complete.\n", .{});
+    try stdout.flush();
 }
 
-fn benchDiscardHandler(stdout: anytype) !void {
+fn elapsed_ns(start: std.Io.Timestamp, end: std.Io.Timestamp) u64 {
+    const dur = start.durationTo(end);
+    return @intCast(@max(dur.nanoseconds, 0));
+}
+
+fn benchDiscardHandler(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     const handler = slogz.discardHandler();
 
     const rec = Record{
@@ -66,20 +80,21 @@ fn benchDiscardHandler(stdout: anytype) !void {
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         try handler.handle(&rec);
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
-    printResult(stdout, "DiscardHandler.handle", elapsed_ns);
+    printResult(stdout, "DiscardHandler.handle", elapsed_ns(start, end));
 }
 
-fn benchTextHandler(stdout: anytype) !void {
+fn benchTextHandler(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.text.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.text.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.text.init(&ctx);
 
     const rec = Record{
@@ -98,26 +113,27 @@ fn benchTextHandler(stdout: anytype) !void {
 
     // Warmup
     for (0..WARMUP_ITERATIONS) |_| {
-        fbs.reset();
+        fbs.end = 0;
         try handler.handle(&rec);
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
-        fbs.reset();
+        fbs.end = 0;
         try handler.handle(&rec);
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
-    printResult(stdout, "TextHandler.handle", elapsed_ns);
+    printResult(stdout, "TextHandler.handle", elapsed_ns(start, end));
 }
 
-fn benchJsonHandler(stdout: anytype) !void {
+fn benchJsonHandler(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs: std.Io.Writer = .fixed(&buf);
 
-    var ctx = slogz.json.Context.init(fbs.writer().any(), .info, Clock.system());
+    var ctx = slogz.json.Context.init(&fbs, .info, Clock.system());
     const handler = slogz.json.init(&ctx);
 
     const rec = Record{
@@ -137,22 +153,23 @@ fn benchJsonHandler(stdout: anytype) !void {
 
     // Warmup
     for (0..WARMUP_ITERATIONS) |_| {
-        fbs.reset();
+        fbs.end = 0;
         try handler.handle(&rec);
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
-        fbs.reset();
+        fbs.end = 0;
         try handler.handle(&rec);
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
-    printResult(stdout, "JsonHandler.handle", elapsed_ns);
+    printResult(stdout, "JsonHandler.handle", elapsed_ns(start, end));
 }
 
-fn benchLoggerDisabled(stdout: anytype) !void {
+fn benchLoggerDisabled(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     const handler = slogz.discardHandler();
     const logger = Logger.init(handler, .@"error", Clock.system());
 
@@ -164,18 +181,19 @@ fn benchLoggerDisabled(stdout: anytype) !void {
     }
 
     // Benchmark (logging at info when level is error - should be fast)
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         logger.info("bench.test", &.{
             Attr.string("key", "value"),
         }) catch {};
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
-    printResult(stdout, "Logger.info (disabled)", elapsed_ns);
+    printResult(stdout, "Logger.info (disabled)", elapsed_ns(start, end));
 }
 
-fn benchLoggerEnabled(stdout: anytype) !void {
+fn benchLoggerEnabled(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     const handler = slogz.discardHandler();
     const logger = Logger.init(handler, .info, Clock.system());
 
@@ -187,18 +205,19 @@ fn benchLoggerEnabled(stdout: anytype) !void {
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         logger.info("bench.test", &.{
             Attr.string("key", "value"),
         }) catch {};
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
-    printResult(stdout, "Logger.info (enabled)", elapsed_ns);
+    printResult(stdout, "Logger.info (enabled)", elapsed_ns(start, end));
 }
 
-fn benchTimestampFormatting(stdout: anytype) !void {
+fn benchTimestampFormatting(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     var buf: [27]u8 = undefined;
     const timestamp: i128 = 1735787045000000;
 
@@ -208,16 +227,17 @@ fn benchTimestampFormatting(stdout: anytype) !void {
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         slogz.rfc3339.formatTimestamp(&buf, timestamp);
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
-    printResult(stdout, "RFC3339.format", elapsed_ns);
+    printResult(stdout, "RFC3339.format", elapsed_ns(start, end));
 }
 
-fn benchAttrCreation(stdout: anytype) !void {
+fn benchAttrCreation(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     var sum: usize = 0;
 
     // Warmup
@@ -230,7 +250,7 @@ fn benchAttrCreation(stdout: anytype) !void {
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         const a1 = Attr.string("key", "value");
         const a2 = Attr.int("count", 42);
@@ -238,15 +258,16 @@ fn benchAttrCreation(stdout: anytype) !void {
         const a4 = Attr.boolean("flag", true);
         sum += @intFromPtr(&a1) + @intFromPtr(&a2) + @intFromPtr(&a3) + @intFromPtr(&a4);
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
     // Prevent optimization
     if (sum == 0) unreachable;
 
-    printResult(stdout, "Attr creation (x4)", elapsed_ns);
+    printResult(stdout, "Attr creation (x4)", elapsed_ns(start, end));
 }
 
-fn benchQueuedRecord(stdout: anytype) !void {
+fn benchQueuedRecord(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     const QueuedRecord = slogz.queue.QueuedRecord;
 
     const rec = Record{
@@ -272,17 +293,18 @@ fn benchQueuedRecord(stdout: anytype) !void {
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         const qr = QueuedRecord.fromRecord(&rec);
         std.mem.doNotOptimizeAway(&qr);
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
-    printResult(stdout, "QueuedRecord.fromRecord", elapsed_ns);
+    printResult(stdout, "QueuedRecord.fromRecord", elapsed_ns(start, end));
 }
 
-fn benchIsSensitiveKey(stdout: anytype) !void {
+fn benchIsSensitiveKey(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     const isSensitiveKey = slogz.redact.isSensitiveKey;
 
     // Test keys of varying sensitivity
@@ -306,21 +328,22 @@ fn benchIsSensitiveKey(stdout: anytype) !void {
 
     // Benchmark
     var sum: usize = 0;
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         for (keys) |key| {
             sum += @intFromBool(isSensitiveKey(key));
         }
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
     // Prevent optimization
     if (sum == 0) unreachable;
 
-    printResult(stdout, "isSensitiveKey (x6 keys)", elapsed_ns);
+    printResult(stdout, "isSensitiveKey (x6 keys)", elapsed_ns(start, end));
 }
 
-fn benchAsyncHandler(stdout: anytype) !void {
+fn benchAsyncHandler(stdout: *std.Io.Writer) !void {
+    const io = getIo();
     // Measure async handler enqueue throughput using a discard inner handler.
     // We create the async context, start it, enqueue records, then stop it.
     const allocator = std.heap.page_allocator;
@@ -361,20 +384,20 @@ fn benchAsyncHandler(stdout: anytype) !void {
     }
 
     // Benchmark
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
     for (0..BENCHMARK_ITERATIONS) |_| {
         handler.handle(&rec) catch {};
     }
-    const elapsed_ns = timer.read();
+    const end = std.Io.Timestamp.now(io, .awake);
 
     // Shutdown gracefully
     ctx.deinit();
 
-    printResult(stdout, "AsyncHandler.enqueue", elapsed_ns);
+    printResult(stdout, "AsyncHandler.enqueue", elapsed_ns(start, end));
 }
 
-fn printResult(stdout: anytype, name: []const u8, elapsed_ns: u64) void {
-    const ns_per_op = elapsed_ns / BENCHMARK_ITERATIONS;
+fn printResult(stdout: *std.Io.Writer, name: []const u8, total_ns: u64) void {
+    const ns_per_op = total_ns / BENCHMARK_ITERATIONS;
     const ops_per_sec = if (ns_per_op > 0) 1_000_000_000 / ns_per_op else 0;
 
     stdout.print("  {s:<30} {d:>8} ns/op  ({d:>10} ops/sec)\n", .{

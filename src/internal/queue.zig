@@ -28,6 +28,10 @@ const Record = @import("../record.zig").Record;
 const Attr = @import("../value.zig").Attr;
 const Value = @import("../value.zig").Value;
 const redact = @import("../util/redact.zig");
+
+inline fn io() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
 const metrics = @import("../metrics/metrics.zig");
 
 /// Maximum number of attributes stored per queued record.
@@ -278,9 +282,9 @@ pub fn BoundedQueue(comptime T: type) type {
                 .count = 0,
                 .dropped = 0,
                 .mutex = std.Io.Mutex.init,
-                .not_empty = .{},
-                .not_full = .{},
-                .empty = .{},
+                .not_empty = std.Io.Condition.init,
+                .not_full = std.Io.Condition.init,
+                .empty = std.Io.Condition.init,
             };
         }
 
@@ -292,8 +296,8 @@ pub fn BoundedQueue(comptime T: type) type {
         /// Returns the queue length after the push, allowing callers to
         /// avoid a separate `len()` call (which would re-acquire the mutex).
         pub fn pushDropOldest(self: *Self, item: T) usize {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
 
             if (self.count == self.buffer.len) {
                 // Drop oldest
@@ -305,102 +309,115 @@ pub fn BoundedQueue(comptime T: type) type {
             self.buffer[self.tail] = item;
             self.tail = (self.tail + 1) % self.buffer.len;
             self.count += 1;
-            self.not_empty.signal();
+            self.not_empty.signal(io());
             return self.count;
         }
 
         /// Push item, blocking if full (with timeout).
         pub fn pushBlocking(self: *Self, item: T, timeout_ms: u32) QueueError!void {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
 
             if (self.count == self.buffer.len) {
                 if (timeout_ms == 0) {
                     return error.QueueFull;
                 }
-                // Wait for space
-                const timeout_ns = @as(u64, timeout_ms) * std.time.ns_per_ms;
-                self.not_full.timedWait(&self.mutex, timeout_ns) catch {
-                    return error.Timeout;
-                };
-                if (self.count == self.buffer.len) {
-                    return error.QueueFull;
+                // Wait for space with timeout via polling
+                const deadline_ns: i96 = std.Io.Timestamp.now(io(), .awake).nanoseconds +
+                    @as(i96, @intCast(@as(u64, timeout_ms) * std.time.ns_per_ms));
+                while (self.count == self.buffer.len) {
+                    if (std.Io.Timestamp.now(io(), .awake).nanoseconds >= deadline_ns) {
+                        return error.QueueFull;
+                    }
+                    // Release mutex, sleep briefly, re-acquire
+                    self.mutex.unlock(io());
+                    io().sleep(std.Io.Duration.fromMilliseconds(1), .awake) catch {};
+                    self.mutex.lockUncancelable(io());
                 }
             }
 
             self.buffer[self.tail] = item;
             self.tail = (self.tail + 1) % self.buffer.len;
             self.count += 1;
-            self.not_empty.signal();
+            self.not_empty.signal(io());
         }
 
         /// Pop item, blocking until available.
         pub fn pop(self: *Self) T {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
 
             while (self.count == 0) {
-                self.not_empty.wait(&self.mutex);
+                self.not_empty.waitUncancelable(io(), &self.mutex);
             }
 
             const item = self.buffer[self.head];
             self.head = (self.head + 1) % self.buffer.len;
             self.count -= 1;
-            self.not_full.signal();
-            if (self.count == 0) self.empty.broadcast();
+            self.not_full.signal(io());
+            if (self.count == 0) self.empty.broadcast(io());
             return item;
         }
 
         /// Try to pop item without blocking.
         pub fn tryPop(self: *Self) ?T {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
 
             if (self.count == 0) return null;
 
             const item = self.buffer[self.head];
             self.head = (self.head + 1) % self.buffer.len;
             self.count -= 1;
-            self.not_full.signal();
-            if (self.count == 0) self.empty.broadcast();
+            self.not_full.signal(io());
+            if (self.count == 0) self.empty.broadcast(io());
             return item;
         }
 
         /// Pop with timeout.
         pub fn popTimeout(self: *Self, timeout_ms: u32) ?T {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
 
             if (self.count == 0) {
                 if (timeout_ms == 0) return null;
-                const timeout_ns = @as(u64, timeout_ms) * std.time.ns_per_ms;
-                self.not_empty.timedWait(&self.mutex, timeout_ns) catch return null;
-                if (self.count == 0) return null;
+                // Wait with timeout via polling
+                const deadline_ns: i96 = std.Io.Timestamp.now(io(), .awake).nanoseconds +
+                    @as(i96, @intCast(@as(u64, timeout_ms) * std.time.ns_per_ms));
+                while (self.count == 0) {
+                    if (std.Io.Timestamp.now(io(), .awake).nanoseconds >= deadline_ns) {
+                        return null;
+                    }
+                    // Release mutex, sleep briefly, re-acquire
+                    self.mutex.unlock(io());
+                    io().sleep(std.Io.Duration.fromMilliseconds(1), .awake) catch {};
+                    self.mutex.lockUncancelable(io());
+                }
             }
 
             const item = self.buffer[self.head];
             self.head = (self.head + 1) % self.buffer.len;
             self.count -= 1;
-            self.not_full.signal();
-            if (self.count == 0) self.empty.broadcast();
+            self.not_full.signal(io());
+            if (self.count == 0) self.empty.broadcast(io());
             return item;
         }
 
         pub fn len(self: *Self) usize {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
             return self.count;
         }
 
         pub fn droppedCount(self: *Self) usize {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
             return self.dropped;
         }
 
         pub fn resetDropped(self: *Self) usize {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
             const d = self.dropped;
             self.dropped = 0;
             return d;
@@ -409,14 +426,23 @@ pub fn BoundedQueue(comptime T: type) type {
         /// Wait until the queue is empty or the timeout expires.
         /// Returns true if the queue is empty, false on timeout.
         pub fn waitEmpty(self: *Self, timeout_ms: u32) bool {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
 
             if (self.count == 0) return true;
             if (timeout_ms == 0) return false;
 
-            const timeout_ns = @as(u64, timeout_ms) * std.time.ns_per_ms;
-            self.empty.timedWait(&self.mutex, timeout_ns) catch return self.count == 0;
+            // Wait with timeout via polling
+            const deadline_ns: i96 = std.Io.Timestamp.now(io(), .awake).nanoseconds +
+                @as(i96, @intCast(@as(u64, timeout_ms) * std.time.ns_per_ms));
+            while (self.count > 0) {
+                if (std.Io.Timestamp.now(io(), .awake).nanoseconds >= deadline_ns) {
+                    return self.count == 0;
+                }
+                self.mutex.unlock(io());
+                io().sleep(std.Io.Duration.fromMilliseconds(1), .awake) catch {};
+                self.mutex.lockUncancelable(io());
+            }
             return self.count == 0;
         }
     };

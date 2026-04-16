@@ -120,7 +120,10 @@ pub const Context = struct {
             const was_disconnected = self.stream == null;
             self.connect() catch {
                 if (attempts < self.options.max_retries) {
-                    { const sio = std.Io.Threaded.global_single_threaded.io(); sio.sleep(std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff))), .awake) catch {}; }
+                    {
+                        const sio = std.Io.Threaded.global_single_threaded.io();
+                        sio.sleep(std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff))), .awake) catch {};
+                    }
                     backoff = @min(backoff * 2, self.options.max_backoff_ms);
                     continue;
                 }
@@ -139,7 +142,10 @@ pub const Context = struct {
                 w.interface.writeAll(data) catch {
                     self.disconnect();
                     if (attempts < self.options.max_retries) {
-                        { const sio = std.Io.Threaded.global_single_threaded.io(); sio.sleep(std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff))), .awake) catch {}; }
+                        {
+                            const sio = std.Io.Threaded.global_single_threaded.io();
+                            sio.sleep(std.Io.Duration.fromMilliseconds(@as(i64, @intCast(backoff))), .awake) catch {};
+                        }
                         backoff = @min(backoff * 2, self.options.max_backoff_ms);
                         continue;
                     }
@@ -156,10 +162,10 @@ pub const Context = struct {
         self.consecutive_failures += 1;
         if (self.consecutive_failures >= circuit_breaker_threshold) {
             self.circuit_open_until = blk: {
-            var ts: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-            break :blk if (rc == 0) @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000) else 0;
-        } + circuit_cooldown_ms;
+                var ts: std.os.linux.timespec = undefined;
+                const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+                break :blk if (rc == 0) @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000) else 0;
+            } + circuit_cooldown_ms;
         }
         return error.WriteFailed;
     }
