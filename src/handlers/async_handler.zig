@@ -77,6 +77,9 @@ pub const Context = struct {
     /// has been placed at its final address (e.g., on the caller's stack frame
     /// or heap). Calling `start()` on a moved Context would be undefined behavior.
     pub fn start(self: *Context) !void {
+        // daemon: async log flusher — long-lived consumer of the log ring
+        // buffer. Runs for the handler's lifetime. Not pool work — a pool
+        // worker holding this loop would never return to the shared queue.
         self.thread = try std.Thread.spawn(.{}, workerThread, .{self});
     }
 
