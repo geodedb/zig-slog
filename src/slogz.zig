@@ -354,3 +354,43 @@ test "slogz discard handler" {
     try handler.handle(&rec);
     try handler.flush(0);
 }
+
+test "parallel re-export is reachable" {
+    // Smoke test: verify parallel.zig is reachable through the public
+    // slogz root module and parallelRecordFormat dispatches end-to-end
+    // against a trivial formatter. Use 8 records to cross the parallel
+    // threshold and exercise the thread-pool path.
+    const N = 8;
+    var inputs: [N]parallel.RecordInput = undefined;
+    var bufs: [N][64]u8 = undefined;
+    var buf_ptrs: [N][]u8 = undefined;
+    var results: [N]parallel.FormattedRecord = undefined;
+
+    for (&inputs, 0..) |*in, i| {
+        in.* = .{
+            .time_utc_us = @as(i128, @intCast(i)),
+            .level = 0,
+            .message = "msg",
+            .logger = "test",
+            .attrs_json = "{}",
+        };
+        buf_ptrs[i] = &bufs[i];
+    }
+
+    const fmt = struct {
+        fn format(in: parallel.RecordInput, buffer: []u8) parallel.FormattedRecord {
+            const msg = in.message;
+            const n = @min(msg.len, buffer.len);
+            @memcpy(buffer[0..n], msg[0..n]);
+            return .{ .data = buffer, .len = n, .success = true };
+        }
+    }.format;
+
+    parallel.parallelRecordFormat(&inputs, &buf_ptrs, &results, fmt);
+    defer deinit();
+
+    for (results) |r| {
+        try std.testing.expect(r.success);
+        try std.testing.expectEqual(@as(usize, 3), r.len);
+    }
+}
