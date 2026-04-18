@@ -13,8 +13,8 @@
     },
     .dependencies = .{
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#d25a961eafe29bf1af26c0e4e7470051ba9f2a17",
-            .hash = "json-0.1.0-tOue4ampCwDLWPBPHYh2SKIK6xl9gEZFUDNF0FidEgfO",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#2800ee0e3909012374b4fcd128e9517ba42ed031",
+            .hash = "json-0.1.0-tOue4cGpCwD8zZfvShwdAkONvT3e47FZu7bXNAIIK7wP",
         },
         .thread_pool = .{
             .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#ee8440f69012cad49fa1d5f22fe18c68f944d9ab",
