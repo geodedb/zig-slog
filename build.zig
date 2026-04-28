@@ -262,6 +262,37 @@ pub fn build(b: *std.Build) void {
     const run_observability_disabled_tests = b.addRunArtifact(observability_disabled_tests);
     test_step.dependOn(&run_observability_disabled_tests.step);
 
+    // Observability enabled-mode smoke test - skipped under
+    // -Dwith_otel=false (the test body returns SkipZigTest when
+    // `slogz.observability.enabled` is false). Under
+    // -Dwith_otel=true the lazy otel dep is resolved and the test
+    // exercises the seam directly: it points
+    // `slogz.observability.global.tracer` at an in-memory recorder,
+    // calls `startClientSpan` with a duck-typed request, and asserts
+    // exactly one span was recorded. Per the otel rollout RECIPE
+    // smoke-test pattern.
+    const observability_enabled_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/observability_enabled_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "slogz", .module = slogz_mod },
+                .{ .name = "build_options", .module = build_options_mod },
+            },
+        }),
+    });
+    if (with_otel) {
+        if (b.lazyDependency("otel", .{
+            .target = target,
+            .optimize = optimize,
+        })) |otel_dep| {
+            observability_enabled_tests.root_module.addImport("otel", otel_dep.module("otel"));
+        }
+    }
+    const run_observability_enabled_tests = b.addRunArtifact(observability_enabled_tests);
+    test_step.dependOn(&run_observability_enabled_tests.step);
+
     // Benchmark executable
     const bench_exe = b.addExecutable(.{
         .name = "bench",
