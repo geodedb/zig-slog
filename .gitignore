@@ -24,3 +24,6 @@ result-*
 # Local configuration
 .envrc.local
 zig-pkg/
+
+# Local git worktrees (per-feature isolated checkouts)
+.worktrees/
