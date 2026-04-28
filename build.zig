@@ -14,9 +14,34 @@ pub fn build(b: *std.Build) void {
     // Thread-pool parallelism option
     const enable_tp = b.option(bool, "enable_tp", "Enable thread-pool-based parallelism") orelse true;
 
+    // -Dwith_otel=<bool> compiles in the otel observability seam. When
+    // false (the default), the otel dependency is never resolved and no
+    // otel symbols are imported - the produced module contains zero
+    // `otel`/`observability` linked symbols. Verified by
+    // otel/scripts/verify-consumer-noop.sh.
+    //
+    // slog is BUILD-FLAG ONLY: even with `-Dwith_otel=true`, slog itself
+    // does not call into the seam. slog is otel's transitive std.log
+    // backend (under `-Dotel_use_devnw_slog=true`), so a slog-emitted
+    // span would risk a logging->span->logging feedback loop. The flag +
+    // seam exist for forward compatibility and consumer-side wiring.
+    const with_otel = b.option(
+        bool,
+        "with_otel",
+        "Compile in otel instrumentation seam (off by default; zero overhead when off)",
+    ) orelse false;
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "feature_journald", feature_journald);
     build_options.addOption(bool, "feature_windows_eventlog", feature_windows_eventlog);
+    build_options.addOption(bool, "with_otel", with_otel);
+    // Shared `build_options` module - every artifact that imports
+    // `slogz` AND needs `build_options` (the slogz module itself, the
+    // observability seam reached through it, the observability tests)
+    // must reach the SAME module instance. Reaching the same source
+    // file via two distinct module instances is a hard compile error
+    // in Zig.
+    const build_options_mod = build_options.createModule();
 
     // Get thread_pool dependency if enabled
     const tp_mod: ?*std.Build.Module = if (enable_tp) blk: {
@@ -47,10 +72,44 @@ pub fn build(b: *std.Build) void {
     if (tp_mod) |sm| {
         slogz_mod.addImport("thread_pool", sm);
     }
+    // The slogz public root re-exports `observability` and
+    // `observability_init`, both of which @import("build_options").
+    // Share the single instance so every test/bench artifact that
+    // reaches src/slogz.zig sees the same module graph.
+    slogz_mod.addImport("build_options", build_options_mod);
 
     // Link libsystemd if journald is enabled
     if (feature_journald) {
         slogz_mod.linkSystemLibrary("systemd", .{});
+    }
+
+    // Named `observability` module - exposed both as a re-export from
+    // src/slogz.zig (`slogz.observability`) AND as a standalone named
+    // module so consumers can `dep.module("observability")` directly if
+    // they prefer the seam without pulling in the rest of slog. Per the
+    // otel rollout RECIPE the named-module pattern is required.
+    const observability_mod = b.addModule("observability", .{
+        .root_source_file = b.path("src/observability.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    observability_mod.addImport("build_options", build_options_mod);
+
+    // When -Dwith_otel=true, resolve the otel dependency and surface it
+    // to both the slogz module and the standalone observability module.
+    // The lazy() call only triggers a fetch when the flag is true; the
+    // disabled build never reaches the dependency resolver, so the otel
+    // package never shows up on disk. slog itself does not call any
+    // seam function - the seam is exposed for consumer-side wiring and
+    // forward compatibility (see observability.zig header).
+    if (with_otel) {
+        if (b.lazyDependency("otel", .{
+            .target = target,
+            .optimize = optimize,
+        })) |otel_dep| {
+            slogz_mod.addImport("otel", otel_dep.module("otel"));
+            observability_mod.addImport("otel", otel_dep.module("otel"));
+        }
     }
 
     // Unit tests (source tests)
@@ -64,6 +123,19 @@ pub fn build(b: *std.Build) void {
     if (json_mod) |m| unit_tests.root_module.addImport("json", m);
     if (tp_mod) |sm| {
         unit_tests.root_module.addImport("thread_pool", sm);
+    }
+    // src/slogz.zig re-exports observability + observability_init,
+    // both of which @import("build_options"). The unit_tests artifact
+    // creates its own module instance pointing at src/slogz.zig, so it
+    // needs the same build_options module attached.
+    unit_tests.root_module.addImport("build_options", build_options_mod);
+    if (with_otel) {
+        if (b.lazyDependency("otel", .{
+            .target = target,
+            .optimize = optimize,
+        })) |otel_dep| {
+            unit_tests.root_module.addImport("otel", otel_dep.module("otel"));
+        }
     }
     if (feature_journald) {
         unit_tests.root_module.linkSystemLibrary("systemd", .{});
@@ -161,6 +233,35 @@ pub fn build(b: *std.Build) void {
     const run_sink_tests = b.addRunArtifact(sink_tests);
     test_step.dependOn(&run_sink_tests.step);
 
+    // Observability disabled-no-op test - asserts the seam compiles to
+    // zero work when -Dwith_otel=false (and skips the assertion when
+    // forced on). The test imports `build_options` directly to inspect
+    // the flag, so we attach the SAME shared module instance the
+    // slogz_mod uses. When -Dwith_otel=true, the lazy otel dep is
+    // surfaced so the seam's @import("otel") inside src/observability.zig
+    // (reached transitively through slogz) resolves.
+    const observability_disabled_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/observability_disabled_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "slogz", .module = slogz_mod },
+                .{ .name = "build_options", .module = build_options_mod },
+            },
+        }),
+    });
+    if (with_otel) {
+        if (b.lazyDependency("otel", .{
+            .target = target,
+            .optimize = optimize,
+        })) |otel_dep| {
+            observability_disabled_tests.root_module.addImport("otel", otel_dep.module("otel"));
+        }
+    }
+    const run_observability_disabled_tests = b.addRunArtifact(observability_disabled_tests);
+    test_step.dependOn(&run_observability_disabled_tests.step);
+
     // Benchmark executable
     const bench_exe = b.addExecutable(.{
         .name = "bench",
@@ -245,6 +346,18 @@ pub fn build(b: *std.Build) void {
     if (json_mod) |m| docs_lib.root_module.addImport("json", m);
     if (tp_mod) |sm| {
         docs_lib.root_module.addImport("thread_pool", sm);
+    }
+    // docs_lib creates its own module pointing at src/slogz.zig, which
+    // re-exports observability + observability_init - both reach
+    // @import("build_options"). Share the single instance.
+    docs_lib.root_module.addImport("build_options", build_options_mod);
+    if (with_otel) {
+        if (b.lazyDependency("otel", .{
+            .target = target,
+            .optimize = optimize,
+        })) |otel_dep| {
+            docs_lib.root_module.addImport("otel", otel_dep.module("otel"));
+        }
     }
     const install_docs = b.addInstallDirectory(.{
         .source_dir = docs_lib.getEmittedDocs(),

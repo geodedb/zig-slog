@@ -95,6 +95,19 @@ pub const multi_handler = @import("handlers/multi_handler.zig");
 // Parallelism
 pub const parallel = @import("parallel.zig");
 
+/// otel observability seam. When `-Dwith_otel=false` (the default), every
+/// function in this namespace collapses to a comptime no-op and no otel
+/// symbols are emitted. When `-Dwith_otel=true`, calls forward into the
+/// `otel` package.
+///
+/// slog itself does NOT call the seam - slog is otel's transitive
+/// std.log backend, so emitting a span from inside a log call would
+/// create a logging->span->logging feedback loop. The seam is exposed
+/// for forward compatibility and so consumers/embedders can wire spans
+/// around their own slog usage if useful. See `src/observability.zig`
+/// and the README's "Observability" section for details.
+pub const observability = @import("observability.zig");
+
 // Network sinks
 pub const tcp_sink = @import("sinks/tcp_sink.zig");
 pub const udp_sink = @import("sinks/udp_sink.zig");
