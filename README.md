@@ -93,7 +93,8 @@ pub fn main() !void {
 ```
 
 Output:
-```
+
+```text
 2025-01-02T03:04:05.000000Z INFO myapp app.started version=1.0.0 port=8080
 ```
 
@@ -118,6 +119,7 @@ const handler = slog.json.init(&ctx);
 ```
 
 Output:
+
 ```json
 {"time":"2025-01-02T03:04:05.000000Z","level":"INFO","msg":"app.started","logger":"myapp","attrs":{"port":8080}}
 ```
@@ -167,7 +169,8 @@ const handler = slog.syslog.init(&ctx);
 ```
 
 Output:
-```
+
+```text
 <134>1 2025-01-02T03:04:05.000000Z myhost myapp 1234 app.started [attrs@32473 port="8080"] Application started
 ```
 
@@ -218,7 +221,8 @@ std.debug.print("{s}", .{output});
 ```
 
 Output:
-```
+
+```text
 # HELP slogz_logs_emitted_total Total number of log records emitted.
 # TYPE slogz_logs_emitted_total counter
 slogz_logs_emitted_total 1234
@@ -293,6 +297,58 @@ zig build -Dfeature_journald=true
 ```bash
 zig build -Dfeature_windows_eventlog=true
 ```
+
+## Observability
+
+slog carries an opt-in OpenTelemetry seam exposed at `slogz.observability`
+(and a bootstrap helper at `slogz.observability_init`). It is **off by
+default**; building or depending on slog without any extra flags emits
+zero `otel`/`observability` symbols and never resolves the otel package.
+
+To compile in the seam:
+
+```sh
+zig build test -Dwith_otel=true
+# or, when consuming slog as a dependency:
+zig build -Dwith_otel=true
+```
+
+When the flag is on, the otel package is fetched lazily from the pinned
+SHA in `build.zig.zon` (`.otel`). When it is off, the verifier
+`otel/scripts/verify-consumer-noop.sh` confirms no `otel`/`observability`
+symbols leak into slog's static link.
+
+**slog is build-flag-only — the seam scaffolding exists for forward
+compatibility; slog itself does not emit spans (would create
+logging-feedback loops).** Specifically:
+
+- slog is otel's transitive `std.log` backend (otel routes its internal
+  diagnostic logs through slog when built with `-Dotel_use_devnw_slog=true`).
+  If slog's log path emitted spans, those spans would call into otel,
+  which logs through slog, which would emit more spans — an unbounded
+  recursion.
+- The `lazy = true` dependency entry plus the comptime `if (with_otel)`
+  gate in `build.zig` keep the cycle broken: a default-flag slog build
+  never resolves the otel package, so otel can depend on slog without
+  the dependency closing into a loop.
+
+The seam is exposed for two reasons:
+
+1. **Forward compatibility**: a future slog operation that genuinely
+   warrants a span (one that does not run inside the log-emission
+   hot path) can call into the seam without re-plumbing the package
+   manifest, build flags, or symbols.
+2. **Consumer wiring**: applications that embed slog inside an
+   OpenTelemetry-aware service can use `slogz.observability` to
+   instrument their own slog interactions with the same conventions
+   and helpers the rest of the devnw/zig stack uses, and can use
+   `slogz.observability_init.Otel.init(...)` from their `main` to
+   bootstrap providers from `OTEL_*` env vars.
+
+See `src/observability.zig` for the seam surface and
+`src/observability_init.zig` for the bootstrap helper. The integration
+recipe lives at `otel/docs/integration/RECIPE.md` in the otel
+repository.
 
 ## Building
 
