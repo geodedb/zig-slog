@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#30b3983dfaab83ebc827205567c32542e111616b",
-            .hash = "json-0.1.0-tOue4cGpCwCGYhHHbM0EF6LxFTxPS2s9rcbKRD-o5xW7",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#1cc10b77e648fdacd1a185c59de390cad92ce84d",
+            .hash = "json-0.1.0-tOue4cGpCwCANP-tUb193snfTKWV0NLdcVb4_Bz-d83e",
         },
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#ee8440f69012cad49fa1d5f22fe18c68f944d9ab",
-            .hash = "thread_pool-0.2.0-11B1Bj_edQCU0Y_-zzOoXuytAgqEkDkfuw2nB-YxUmEL",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#1674ebbeb0eed7107e6e488cc9fd7b97a8036966",
+            .hash = "thread_pool-0.2.1-11B1BqycdgAPt02YXm95pvBtazxHeJlzMBIUHZ0yTzSa",
         },
         // otel observability seam. Lazy, so a default-flag build
         // (`-Dwith_otel=false`) never resolves or fetches the package.
