@@ -31,6 +31,33 @@ pub fn build(b: *std.Build) void {
         "Compile in otel instrumentation seam (off by default; zero overhead when off)",
     ) orelse false;
 
+    // Forward otel build options so the upstream package is configured
+    // identically across all consumers in the build graph. Without this,
+    // each consumer's `b.lazyDependency("otel", ...)` materialises a
+    // DISTINCT otel Module instance (different `build_options` ⇒ different
+    // package keys), and zig 0.16 errors with `file exists in modules
+    // 'otel' and 'otel0'` when transitive imports overlap.
+    const otel_use_devnw_tls = b.option(
+        bool,
+        "otel_use_devnw_tls",
+        "Forward to upstream otel: HTTPS via DevNW tls",
+    ) orelse false;
+    const otel_disabled = b.option(
+        bool,
+        "otel_disabled",
+        "Forward to upstream otel: comptime-disable",
+    ) orelse false;
+    const otel_profiles = b.option(
+        bool,
+        "otel_profiles",
+        "Forward to upstream otel: experimental profiles",
+    ) orelse false;
+    const otel_use_devnw_grpc = b.option(
+        bool,
+        "otel_use_devnw_grpc",
+        "Forward to upstream otel: DevNW gRPC",
+    ) orelse false;
+
     const build_options = b.addOptions();
     build_options.addOption(bool, "feature_journald", feature_journald);
     build_options.addOption(bool, "feature_windows_eventlog", feature_windows_eventlog);
@@ -106,6 +133,10 @@ pub fn build(b: *std.Build) void {
         if (b.lazyDependency("otel", .{
             .target = target,
             .optimize = optimize,
+            .otel_use_devnw_tls = otel_use_devnw_tls,
+            .otel_disabled = otel_disabled,
+            .otel_profiles = otel_profiles,
+            .otel_use_devnw_grpc = otel_use_devnw_grpc,
         })) |otel_dep| {
             slogz_mod.addImport("otel", otel_dep.module("otel"));
             observability_mod.addImport("otel", otel_dep.module("otel"));
@@ -133,6 +164,10 @@ pub fn build(b: *std.Build) void {
         if (b.lazyDependency("otel", .{
             .target = target,
             .optimize = optimize,
+            .otel_use_devnw_tls = otel_use_devnw_tls,
+            .otel_disabled = otel_disabled,
+            .otel_profiles = otel_profiles,
+            .otel_use_devnw_grpc = otel_use_devnw_grpc,
         })) |otel_dep| {
             unit_tests.root_module.addImport("otel", otel_dep.module("otel"));
         }
@@ -255,6 +290,10 @@ pub fn build(b: *std.Build) void {
         if (b.lazyDependency("otel", .{
             .target = target,
             .optimize = optimize,
+            .otel_use_devnw_tls = otel_use_devnw_tls,
+            .otel_disabled = otel_disabled,
+            .otel_profiles = otel_profiles,
+            .otel_use_devnw_grpc = otel_use_devnw_grpc,
         })) |otel_dep| {
             observability_disabled_tests.root_module.addImport("otel", otel_dep.module("otel"));
         }
@@ -286,6 +325,10 @@ pub fn build(b: *std.Build) void {
         if (b.lazyDependency("otel", .{
             .target = target,
             .optimize = optimize,
+            .otel_use_devnw_tls = otel_use_devnw_tls,
+            .otel_disabled = otel_disabled,
+            .otel_profiles = otel_profiles,
+            .otel_use_devnw_grpc = otel_use_devnw_grpc,
         })) |otel_dep| {
             observability_enabled_tests.root_module.addImport("otel", otel_dep.module("otel"));
         }
@@ -386,6 +429,10 @@ pub fn build(b: *std.Build) void {
         if (b.lazyDependency("otel", .{
             .target = target,
             .optimize = optimize,
+            .otel_use_devnw_tls = otel_use_devnw_tls,
+            .otel_disabled = otel_disabled,
+            .otel_profiles = otel_profiles,
+            .otel_use_devnw_grpc = otel_use_devnw_grpc,
         })) |otel_dep| {
             docs_lib.root_module.addImport("otel", otel_dep.module("otel"));
         }
