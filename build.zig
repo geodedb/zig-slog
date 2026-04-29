@@ -61,6 +61,7 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(bool, "feature_journald", feature_journald);
     build_options.addOption(bool, "feature_windows_eventlog", feature_windows_eventlog);
+    build_options.addOption([]const u8, "package_name", "slog");
     build_options.addOption(bool, "with_otel", with_otel);
     // Shared `build_options` module - every artifact that imports
     // `slogz` AND needs `build_options` (the slogz module itself, the
