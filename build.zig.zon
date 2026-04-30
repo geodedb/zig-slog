@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#3fe6b5e54d9178e7934678b60860d68166886c62",
-            .hash = "json-0.1.0-tOue4cGpCwAqJ9-IF29UgCs0gRtE__k5aoFSMYYHLwNi",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#0adaa347ea4c1d70b100676019de3b375b63c357",
+            .hash = "json-0.1.0-tOue4cGpCwB5_tkAlBqcI8Vsp1SytlrD83ef93NCegKE",
         },
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#7fb7501563b447bec3ef253be14d9f8d8f0443ef",
-            .hash = "thread_pool-0.2.1-11B1BoLIdgChPpTBcutApyan1-i28GNwa8xB1ojizPL0",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#f779ab8150dba03f0bde85dd6401c137de04c0e3",
+            .hash = "thread_pool-0.2.1-11B1BobIdgATaQdu3KWiqXyCSSkn8-ic9tJS00_Iwbt-",
         },
         // otel observability seam. Lazy, so a default-flag build
         // (`-Dwith_otel=false`) never resolves or fetches the package.
@@ -29,8 +29,8 @@
         // breaks the cycle. Pin tracked in the otel rollout plan;
         // bump SHA + hash together via `zig fetch --save`.
         .otel = .{
-            .url = "git+https://gitlab.com/devnw/zig/otel#ee492166dfefc7914229979c933411e6da9e504e",
-            .hash = "otel-0.1.0-B0v3lr2UMwA5qFJCa20OT-1huDPLm1sTIFD22PQBADDD",
+            .url = "git+https://gitlab.com/devnw/zig/otel.git#f17cf51306f87dd200c482709a653247c7b69772",
+            .hash = "otel-0.1.0-B0v3lpwNNACMQqP5_axFbUW-46-__Pl8c3qh3RYXQ8gh",
             .lazy = true,
         },
     },
