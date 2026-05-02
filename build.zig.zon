@@ -1,6 +1,6 @@
 .{
     .name = .slog,
-    .version = "0.1.0",
+    .version = "0.1.3",
     .fingerprint = 0x28b061b90f84a949,
     .minimum_zig_version = "0.16.0",
     .paths = .{
@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#27bcf1afddd128dfb262a9e804de0ff565b27833",
-            .hash = "json-0.1.0-tOue4cGpCwAUGTEmdAUdnxnisyeRHfwHReim4F3eH6a0",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#v0.1.2",
+            .hash = "json-0.1.2-tOue4X2pCwBUc5tV0kO8hfTaD1xPZHtE_z_eOpOdpo3Y",
         },
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#c41388bdab88916bb453a20adae2c722405287d1",
-            .hash = "thread_pool-0.2.1-11B1BsqSdgCqx_EsSPzdPqfGhNFzonijUGYfDuy0fpTb",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#v0.2.2",
+            .hash = "thread_pool-0.2.2-11B1BsqSdgAdUthtiFxVynrhft3Bv8q7_VLBsF3_z1oH",
         },
     },
 }
