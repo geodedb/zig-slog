@@ -25,11 +25,7 @@ pub fn build(b: *std.Build) void {
     // backend (under `-Dotel_use_devnw_slog=true`), so a slog-emitted
     // span would risk a logging->span->logging feedback loop. The flag +
     // seam exist for forward compatibility and consumer-side wiring.
-    const with_otel = b.option(
-        bool,
-        "with_otel",
-        "Compile in otel instrumentation seam (off by default; zero overhead when off)",
-    ) orelse false;
+    const with_otel = false; // 2026-05-02: hardcoded after removing the lazy otel dep — see build.zig.zon header note.
 
     // Forward otel build options so the upstream package is configured
     // identically across all consumers in the build graph. Without this,
