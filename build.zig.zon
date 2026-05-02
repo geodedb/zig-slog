@@ -1,6 +1,6 @@
 .{
     .name = .slog,
-    .version = "0.1.5",
+    .version = "0.1.6",
     .fingerprint = 0x28b061b90f84a949,
     .minimum_zig_version = "0.16.0",
     .paths = .{
