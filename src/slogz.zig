@@ -18,12 +18,8 @@
 //! ```zig
 //! const slogz = @import("slogz");
 //!
-//! var text_ctx = slogz.text.Context.init(
-//!     std.Io.File.stderr().writer().any(),
-//!     .info,
-//!     slogz.Clock.system(),
-//! );
-//! const handler = slogz.text.init(&text_ctx);
+//! var text_ctx: slogz.text.Context = undefined;
+//! const handler = slogz.stderrHandler(&text_ctx, .info);
 //!
 //! const logger = slogz.Logger.init(handler, .info, slogz.Clock.system()).named("myapp");
 //!

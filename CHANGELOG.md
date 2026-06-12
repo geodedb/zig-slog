@@ -9,9 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 - TLS/HTTPS support for HTTP sink
-- DNS hostname resolution
-- Multi-handler fan-out
 - Log sampling and rate limiting
+
+### Fixed
+- Compare-bench regression gate restored under Zig 0.16 (PERF-043)
+- Multi-handler fan-out dispatches sequentially without per-record overhead, fixing a ~200x regression (PERF-039)
+- Async queue worker woken via condvar; dead condvars removed and enqueue uses a single lock (PERF-040, PERF-041, PERF-042)
+- Rotating log files are created with 0o600 permissions (SEC-0034)
+- Log-path symlink guard with absolute-path opt-in (SEC-0037)
+- Full-key redaction scan covers all sensitive key patterns (SEC-0038)
+- Oversized records are truncated with a marker and counted in the new `slogz_records_truncated_total` metric (SEC-0039)
+- All 8 examples ported to Zig 0.16 and compile-checked in CI (Q-48)
 
 ## [0.1.0] - 2026-01-24
 
