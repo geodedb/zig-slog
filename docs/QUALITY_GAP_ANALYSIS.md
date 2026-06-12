@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main
-**Last updated:** 2026-06-12 (rev 6 -- Pass 6: Q-27 fully Closed (deprecatedWriter gone from src/, issue #1 closed); 8 new findings added Q-41..Q-48)
+**Last updated:** 2026-06-12 (rev 7 -- Pass 6 closure: Q-41..Q-48 all Closed; Q-46 with gitignored correction; latent-dead-test discovery noted)
 **Scoring framework:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -13,24 +13,29 @@
 |----------|-------|--------|----------|------|------------------|
 | Critical | 4 | 4 | 0 | 0 | 0 |
 | High | 8 | 7 | 1 | 0 | 0 |
-| Medium | 20 | 17 | 0 | 3 | 0 |
-| Low | 16 | 10 | 1 | 5 | 0 |
-| **Total** | **48** | **38** | **2** | **8** | **0** |
+| Medium | 20 | 20 | 0 | 0 | 0 |
+| Low | 16 | 15 | 1 | 0 | 0 |
+| **Total** | **48** | **46** | **2** | **0** | **0** |
 
 ### Remaining Items
 
-Pass 6 added 8 new findings (Q-41..Q-48). Open items:
+**All items resolved as of pass-6 closure (2026-06-12).** Zero open findings.
 
-1. **Q-48 (Medium, NEW-9)** -- all 8 `examples/*.zig` broken: import `@import("slog")` but module is exported as `"slogz"` (build.zig:90); 6/8 use removed `std.io.getStdErr/getStdOut`; examples not wired into build.zig so breakage is invisible.
-2. **Q-44 (Medium, NEW-4)** -- pre-commit zig-fmt hook targets `benchmarks/` (no .zig files) instead of `bench/` (3 .zig files); future bench edits escape format checking.
-3. **Q-45 (Medium, NEW-5)** -- BoundedQueue `not_full`/`empty` condvars signaled but never waited on (dead fields + false-signal cost). Cross-referenced to PERF-040/PERF-042; no duplicate GitLab issue.
-4. **Q-46 (Medium, NEW-7)** -- 9 stale `zig-pkg/` vendor snapshots (~36 MB). Issue [#44](https://gitlab.com/devnw/zig/slog/-/issues/44).
-5. **Q-47 (Low, NEW-8)** -- slogz.zig:22 module doc-comment example uses `.writer().any()` (does not compile under Zig 0.16).
-6. **Q-41/Q-42/Q-43 (Low, NEW-1/2/3)** -- auto-fixable lint (trailing whitespace/EOF, ruff-format, MD040 fences). Combined issue [#45](https://gitlab.com/devnw/zig/slog/-/issues/45).
+Pass 6 added 8 new findings (Q-41..Q-48). All are now Closed:
+
+- **Q-48** Closed -- commits `2be80a9`, `641fb3b`; 8 examples ported to Zig 0.16/slogz; `zig build examples` wired into check; async examples runtime-fixed (start()); CHANGELOG refreshed in `8cc6a56`. GitLab #42 closed.
+- **Q-44** Closed -- commit `f852d57`; pre-commit zig-fmt now targets `bench/` instead of `benchmarks/`; whitespace/EOF/ruff/MD040 all fixed; `pre-commit --all-files` green. GitLab #45 closed.
+- **Q-45** Closed -- commit `bd93b03`; dead `not_full`/`empty` condvars removed (same fix as PERF-042); no separate GitLab issue (PERF issues authoritative).
+- **Q-46** Closed -- 9 stale `zig-pkg/` snapshots deleted from local disk. **Important correction:** `zig-pkg/` is gitignored -- the snapshots were local-disk only and never committed to the repo; the original framing about "repo bloat" was incorrect. Issue closed with clarification. GitLab #44 closed.
+- **Q-47** Closed -- commit `8cc6a56`; slogz.zig doc example fixed (stderrHandler pattern).
+- **Q-41/Q-42/Q-43** Closed -- commit `f852d57`; trailing whitespace/EOF, ruff-format, MD040 fences all fixed; pre-commit gates now green. GitLab #45 closed.
+
+**Side discovery -- latent-dead tests revived (pass 6):**
+In-file tests in `src/internal/queue.zig`, `src/handlers/async_handler.zig`, and `src/handlers/rotating_file.zig` were never running because no `test {}` block in `slogz.zig` referenced their compilation units. 29 latent-dead tests were revived and 16 new tests added by wiring `slogz.zig` `test {}` block references, growing the suite from 261 to 306. This relates to GitLab #11 (test coverage). No new gap item created; recorded here for traceability.
 
 Pass 5 item now resolved:
 
-- **Q-27 deprecatedWriter()** -- **fully Closed**. `grep -rn deprecatedWriter src/` returns zero hits; slogz.zig uses `std.Io.File.stderr().writer()` + `&stderr_file_writer.interface`. GitLab issue [#1](https://gitlab.com/devnw/zig/slog/-/issues/1) closed with evidence.
+- **Q-27 deprecatedWriter()** -- **fully Closed**. `grep -rn deprecatedWriter src/` returns zero hits. GitLab issue [#1](https://gitlab.com/devnw/zig/slog/-/issues/1) closed.
 
 ---
 
@@ -78,14 +83,14 @@ Pass 5 item now resolved:
 | 21 | Critical | 100 | maintainability | writeJsonValue() duplicated verbatim across 4 files | json_handler.zig, tcp_sink.zig, udp_sink.zig, http_sink.zig | json_handler.zig:152, tcp_sink.zig:164, udp_sink.zig:89, http_sink.zig:187: identical `fn writeJsonValue(enc: anytype, value: Value) !void` with same switch arms | [#33](https://gitlab.com/devnw/zig/slog/-/issues/33) | Extracted to `src/fmt/json_value.zig`; all 4 files import shared function | @maintainers | M | **Closed** |
 | 22 | High | 60 | maintainability | writeValue() behavioral drift across 4 text-mode copies | text_handler.zig, journald.zig, windows_eventlog.zig, rotating_file.zig | text_handler.zig:131 uses `{d:.6}` for floats; journald.zig:176 and windows_eventlog.zig:150 use `{d}`; rotating_file.zig:316 uses raw `writeAll` instead of `sanitizeOutput`; marshaler text is `<marshaler>` vs `?` | [#34](https://gitlab.com/devnw/zig/slog/-/issues/34) | Extracted to `src/fmt/text_value.zig` with canonical behavior (f64:.6, 0x hex, `<marshaler>`); all 4 handlers import shared function | @maintainers | M | **Closed** |
 | 23 | High | 60 | architecture | rotating_file.zig missing sanitizeOutput() on .str values | rotating_file.zig | Line 316: `.str => \|s\| try writer.writeAll(s)` -- no `sanitizeOutput()` call; all other text handlers sanitize strings | [#35](https://gitlab.com/devnw/zig/slog/-/issues/35) | Replace `writer.writeAll(s)` with `sanitize.sanitizeOutput(writer, s)` | @maintainers | S | **Closed** (sanitizeOutput applied to .str in writeValue) |
-| 45 | Medium | 48 | architecture | BoundedQueue `not_full`/`empty` condvars signaled but never waited on (NEW-5) | src/internal/queue.zig | Defined at queue.zig:272 (`not_full`) and :274 (`empty`); signaled/broadcast at :357,:372,:401 (`not_full.signal`) and :358,:373,:402 (`empty.broadcast`); `grep ".wait(" src/internal/queue.zig` returns zero matches -- no consumer ever waits on either, so both fields are dead and every enqueue pays a needless signal/broadcast syscall | _PERF-040/PERF-042_ | Remove dead `not_full`/`empty` condvars + their signal/broadcast calls, OR wire real waiters if backpressure is intended | @maintainers | S | **Open** (cross-ref PERF-040/042; no duplicate Q issue) |
-| 44 | Medium | 36 | ci-cd | pre-commit zig-fmt hook targets `benchmarks/` (no .zig) instead of `bench/` (NEW-4) | .pre-commit-config.yaml | Line 122: `args: [src/, build.zig, tests/, benchmarks/, examples/]` -- `benchmarks/` holds only a `results/` dir (0 .zig files); the real bench sources live in `bench/` (`bench_main.zig`, `compare.zig`, `scale_bench.zig`); future edits to `bench/*.zig` are never format-checked | -- | Change `benchmarks/` to `bench/` in the zig-fmt hook args | @maintainers | S | **Open** |
-| 46 | Medium | 36 | deps | 9 stale zig-pkg/ vendor snapshots (~36 MB) (NEW-7) | zig-pkg/ | 3x `json-0.1.0-*`, 4x `thread_pool-0.2.0-*`, 2x `uri-0.1.0-*` accumulated across dep-convergence commits; only `json-0.1.4`/`thread_pool-0.2.4`/`uri-0.1.4` are live | [#44](https://gitlab.com/devnw/zig/slog/-/issues/44) | Remove the 9 superseded snapshots after confirming build.zig.zon references only live hashes | @maintainers | S | **Open** |
-| 48 | Medium | 36 | api-contract | All 8 examples/*.zig broken; not wired into build (NEW-9) | examples/*.zig, build.zig | All 8 examples `@import("slog")` but the module is exported as `"slogz"` (build.zig:90); 6/8 also use removed `std.io.getStdErr`/`getStdOut`; examples are not referenced in build.zig at all, so the breakage never surfaces in CI | _gap-sync may file_ | Rename import to `"slogz"`, update to Zig 0.16 writer APIs, and wire examples into build.zig so they compile in CI | @maintainers | M | **Open** (gap-sync owns issue creation; no existing examples issue found) |
-| 47 | Low | 24 | docs | slogz.zig:22 module doc-comment example uses `.writer().any()` (NEW-8) | src/slogz.zig | Line 22: doc-comment example `std.Io.File.stderr().writer().any()` does not compile under Zig 0.16; correct form is `&writer.interface` | -- | Update doc-comment example to the compiling form | @maintainers | S | **Open** |
-| 41 | Low | 16 | cleanup | Trailing whitespace + EOF normalization (NEW-1) | .gitlab/issue_templates/Bug Report.md, .gitlab/issue_templates/Question.md, SECURITY.md | 6 trailing-whitespace lines in Bug Report, 2 in Question; SECURITY.md ends with a double trailing newline (end-of-file-fixer normalizes). All pre-commit auto-fixable | [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) | `pre-commit run trailing-whitespace end-of-file-fixer --all-files` | @maintainers | S | **Open** |
-| 43 | Low | 12 | cleanup | markdownlint MD040 unlabeled code fences (NEW-3) | docs/ARCHITECTURE.md, docs/API.md, .gitlab/issue_templates/Bug Report.md | 20 bare fences in ARCHITECTURE.md, 25 in API.md, 3 in Bug Report template -- no language label, breaks highlighting and trips MD040 | [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) | Add language labels (zig/text/json) to bare fences | @maintainers | S | **Open** |
-| 42 | Low | 8 | cleanup | scripts/detect_diamond_deps.py fails ruff-format (NEW-2) | scripts/detect_diamond_deps.py | `ruff format --check scripts/detect_diamond_deps.py` reports formatting drift; blocks the Python pre-commit hook | [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) | `ruff format scripts/detect_diamond_deps.py` | @maintainers | S | **Open** |
+| 45 | Medium | 48 | architecture | BoundedQueue `not_full`/`empty` condvars signaled but never waited on (NEW-5) | src/internal/queue.zig | Defined at queue.zig:272 (`not_full`) and :274 (`empty`); signaled/broadcast at :357,:372,:401 (`not_full.signal`) and :358,:373,:402 (`empty.broadcast`); `grep ".wait(" src/internal/queue.zig` returns zero matches -- no consumer ever waits on either, so both fields are dead and every enqueue pays a needless signal/broadcast syscall | _PERF-040/PERF-042_ | Remove dead `not_full`/`empty` condvars + their signal/broadcast calls, OR wire real waiters if backpressure is intended | @maintainers | S | **Closed** (bd93b03; dead condvars removed; same fix as PERF-042; no separate issue) |
+| 44 | Medium | 36 | ci-cd | pre-commit zig-fmt hook targets `benchmarks/` (no .zig) instead of `bench/` (NEW-4) | .pre-commit-config.yaml | Line 122: `args: [src/, build.zig, tests/, benchmarks/, examples/]` -- `benchmarks/` holds only a `results/` dir (0 .zig files); the real bench sources live in `bench/` (`bench_main.zig`, `compare.zig`, `scale_bench.zig`); future edits to `bench/*.zig` are never format-checked | -- | Change `benchmarks/` to `bench/` in the zig-fmt hook args | @maintainers | S | **Closed** (f852d57; zig-fmt now targets bench/; pre-commit --all-files green; #45 closed) |
+| 46 | Medium | 36 | deps | 9 stale zig-pkg/ vendor snapshots (~36 MB) (NEW-7) | zig-pkg/ | 3x `json-0.1.0-*`, 4x `thread_pool-0.2.0-*`, 2x `uri-0.1.0-*` accumulated across dep-convergence commits; only `json-0.1.4`/`thread_pool-0.2.4`/`uri-0.1.4` are live | [#44](https://gitlab.com/devnw/zig/slog/-/issues/44) | Remove the 9 superseded snapshots after confirming build.zig.zon references only live hashes | @maintainers | S | **Closed** -- **Correction:** `zig-pkg/` is gitignored; snapshots were local-disk only and never committed; "repo bloat" framing was wrong. Local snapshots deleted. Issue closed with clarification. (#44 closed) |
+| 48 | Medium | 36 | api-contract | All 8 examples/*.zig broken; not wired into build (NEW-9) | examples/*.zig, build.zig | All 8 examples `@import("slog")` but the module is exported as `"slogz"` (build.zig:90); 6/8 also use removed `std.io.getStdErr`/`getStdOut`; examples are not referenced in build.zig at all, so the breakage never surfaces in CI | [#42](https://gitlab.com/devnw/zig/slog/-/issues/42) | 8 examples ported to Zig 0.16/slogz; `zig build examples` wired into check; async examples runtime-fixed (start()); CHANGELOG refreshed | @maintainers | M | **Closed** (2be80a9, 641fb3b, 8cc6a56; #42 closed) |
+| 47 | Low | 24 | docs | slogz.zig:22 module doc-comment example uses `.writer().any()` (NEW-8) | src/slogz.zig | Line 22: doc-comment example `std.Io.File.stderr().writer().any()` does not compile under Zig 0.16; correct form is `&writer.interface` | -- | Updated doc-comment example to stderrHandler pattern | @maintainers | S | **Closed** (8cc6a56) |
+| 41 | Low | 16 | cleanup | Trailing whitespace + EOF normalization (NEW-1) | .gitlab/issue_templates/Bug Report.md, .gitlab/issue_templates/Question.md, SECURITY.md | 6 trailing-whitespace lines in Bug Report, 2 in Question; SECURITY.md ends with a double trailing newline (end-of-file-fixer normalizes). All pre-commit auto-fixable | [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) | Fixed via `pre-commit run trailing-whitespace end-of-file-fixer --all-files`; `pre-commit --all-files` green | @maintainers | S | **Closed** (f852d57; #45 closed) |
+| 43 | Low | 12 | cleanup | markdownlint MD040 unlabeled code fences (NEW-3) | docs/ARCHITECTURE.md, docs/API.md, .gitlab/issue_templates/Bug Report.md | 20 bare fences in ARCHITECTURE.md, 25 in API.md, 3 in Bug Report template -- no language label, breaks highlighting and trips MD040 | [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) | Language labels added to bare fences; MD040 gates green | @maintainers | S | **Closed** (f852d57; #45 closed) |
+| 42 | Low | 8 | cleanup | scripts/detect_diamond_deps.py fails ruff-format (NEW-2) | scripts/detect_diamond_deps.py | `ruff format --check scripts/detect_diamond_deps.py` reports formatting drift; blocks the Python pre-commit hook | [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) | `ruff format scripts/detect_diamond_deps.py` applied; ruff gate green | @maintainers | S | **Closed** (f852d57; #45 closed) |
 
 **Notes:**
 
@@ -123,14 +128,14 @@ Pass 5 item now resolved:
 | 13 | LoggerOptions re-exported but does not exist | 36 | Closed |
 | 35 | JSON schema inconsistency between json_handler and network sinks | 36 | **Closed** (pass 5) |
 | 36 | msg_id field present in Record but absent from all JSON/text outputs | 24 | **Closed** (pass 5) |
-| 48 | All 8 examples/*.zig broken (wrong module name + removed APIs) | 36 | **Open** (NEW-9) |
+| 48 | All 8 examples/*.zig broken (wrong module name + removed APIs) | 36 | **Closed** (2be80a9, 641fb3b, 8cc6a56; #42) |
 
 ### architecture
 
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 2 | stderrHandler / stderrJsonHandler dangling pointers | 80 | Closed |
-| 45 | BoundedQueue not_full/empty condvars dead (signaled, never waited) | 48 | **Open** (NEW-5; xref PERF-040/042) |
+| 45 | BoundedQueue not_full/empty condvars dead (signaled, never waited) | 48 | **Closed** (bd93b03; dead condvars removed; xref PERF-040/042) |
 | 3 | AsyncHandler.Context.init dangling pointer to thread | 80 | Closed |
 | 8 | formatBackupPath buffer aliasing | 48 | Closed |
 | 11 | @errorName guard missing in 4 of 5 handlers | 36 | Closed |
@@ -145,13 +150,13 @@ Pass 5 item now resolved:
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 5 | CI pipeline has no build or test stage | 80 | Closed |
-| 44 | pre-commit zig-fmt hook targets benchmarks/ not bench/ | 36 | **Open** (NEW-4) |
+| 44 | pre-commit zig-fmt hook targets benchmarks/ not bench/ | 36 | **Closed** (f852d57; #45) |
 
 ### deps
 
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
-| 46 | 9 stale zig-pkg/ vendor snapshots (~36 MB) | 36 | **Open** (NEW-7, #44) |
+| 46 | 9 stale zig-pkg/ vendor snapshots (~36 MB) | 36 | **Closed** (local-disk only; zig-pkg/ gitignored; correction noted; #44) |
 
 ### perf
 
@@ -187,23 +192,23 @@ Pass 5 item now resolved:
 | 32 | Module docstring example shows incorrect API signatures | 32 | **Closed** (pass 5) |
 | 37 | HTTP sink docstring claims "Connection pooling" falsely | 16 | **Closed** (pass 5) |
 | 40 | isSensitiveKey auto-redaction behavior undocumented | 24 | **Closed** (pass 5) |
-| 47 | slogz.zig:22 doc-comment example uses non-compiling .writer().any() | 24 | **Open** (NEW-8) |
+| 47 | slogz.zig:22 doc-comment example uses non-compiling .writer().any() | 24 | **Closed** (8cc6a56) |
 
 ### cleanup
 
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 25 | incReconnections() zero callers (regression) | 30 | Closed |
-| 27 | deprecatedWriter() usage (3 call sites) | 12 | **Partially Closed** |
+| 27 | deprecatedWriter() usage (3 call sites) | 12 | **Closed** (pass 6; #1) |
 | 17 | rotating_file dead import | 16 | Closed |
 | 18 | epochDays / ymdToEpochDay duplicated | 16 | Closed |
 | 19 | BaseHandlerContext dead code | 8 | Closed |
 | 20 | Metrics.incReconnections() dead code | 8 | Closed |
 | 38 | Dead testWrite helper in text_value.zig | 8 | **Closed** (pass 5) |
 | 39 | "[REDACTED]" literal duplicated 3x | 8 | **Closed** (pass 5) |
-| 41 | Trailing whitespace + EOF normalization | 16 | **Open** (NEW-1, #45) |
-| 43 | markdownlint MD040 unlabeled code fences | 12 | **Open** (NEW-3, #45) |
-| 42 | scripts/detect_diamond_deps.py fails ruff-format | 8 | **Open** (NEW-2, #45) |
+| 41 | Trailing whitespace + EOF normalization | 16 | **Closed** (f852d57; #45) |
+| 43 | markdownlint MD040 unlabeled code fences | 12 | **Closed** (f852d57; #45) |
+| 42 | scripts/detect_diamond_deps.py fails ruff-format | 8 | **Closed** (f852d57; #45) |
 
 ---
 
@@ -217,20 +222,20 @@ Pass 5 item now resolved:
 | 24 | rotating_file missing close vtable entry | S | Add `close` fn + vtable entry; mirrors pattern in other handlers | **Closed** |
 | 25 | incReconnections() zero callers (regression) | S | Add `metrics.global.incReconnections()` at tcp_sink reconnection point | **Closed** |
 | 26 | UDP sink serializes under mutex | S | JSON formatting moved outside mutex | **Closed** |
-| 27 | deprecatedWriter() usage | S | Replace with current Zig 0.15 writer API at 3 call sites | **Partially Closed** |
+| 27 | deprecatedWriter() usage | S | Replace with current Zig 0.15 writer API at 3 call sites | **Closed** (pass 6; #1) |
 | 32 | Module docstring incorrect API signatures | S | Update slogz.zig lines 28-34 to match actual Logger.init(handler, level, clock) and logger.info(msg_id, attrs) | **Closed** (pass 5) |
 | 37 | HTTP sink false "Connection pooling" docstring | S | Remove or correct the claim at http_sink.zig:10 | **Closed** (pass 5) |
 | 38 | Dead testWrite helper | S | Remove text_value.zig:62-68 | **Closed** (pass 5) |
 | 39 | "[REDACTED]" literal duplicated 3x | S | Import from redact.zig in value.zig and queue.zig | **Closed** (pass 5) |
 | 36 | msg_id absent from JSON/text output | S | Add "msg_id" key to JSON and text output when non-empty and different from message | **Closed** (pass 5) |
 | 40 | isSensitiveKey auto-redaction undocumented | S | Add docstrings listing the 15 sensitive key patterns | **Closed** (pass 5) |
-| 44 | pre-commit zig-fmt hook wrong dir | S | Change `benchmarks/` to `bench/` in .pre-commit-config.yaml:122 | **Open** (NEW-4) |
-| 45 | BoundedQueue dead condvars | S | Remove `not_full`/`empty` + their signals (or wire waiters); xref PERF-040/042 | **Open** (NEW-5) |
-| 46 | 9 stale zig-pkg vendor snapshots | S | Delete 9 superseded `0.1.0`/`0.2.0` snapshots after build.zig.zon check | **Open** (NEW-7, #44) |
-| 47 | slogz.zig doc-comment non-compiling example | S | Replace `.writer().any()` with `&writer.interface` at slogz.zig:22 | **Open** (NEW-8) |
-| 41 | Trailing whitespace + EOF | S | `pre-commit run trailing-whitespace end-of-file-fixer --all-files` | **Open** (NEW-1, #45) |
-| 42 | ruff-format drift | S | `ruff format scripts/detect_diamond_deps.py` | **Open** (NEW-2, #45) |
-| 43 | MD040 unlabeled fences | S | Add language labels to bare fences in ARCHITECTURE.md/API.md/Bug Report | **Open** (NEW-3, #45) |
+| 44 | pre-commit zig-fmt hook wrong dir | S | Change `benchmarks/` to `bench/` in .pre-commit-config.yaml:122 | **Closed** (f852d57; #45) |
+| 45 | BoundedQueue dead condvars | S | Remove `not_full`/`empty` + their signals (or wire waiters); xref PERF-040/042 | **Closed** (bd93b03; xref PERF-042) |
+| 46 | 9 stale zig-pkg vendor snapshots | S | Delete 9 superseded `0.1.0`/`0.2.0` snapshots after build.zig.zon check | **Closed** (local-disk only; zig-pkg/ gitignored; #44) |
+| 47 | slogz.zig doc-comment non-compiling example | S | Replace `.writer().any()` with `&writer.interface` at slogz.zig:22 | **Closed** (8cc6a56) |
+| 41 | Trailing whitespace + EOF | S | `pre-commit run trailing-whitespace end-of-file-fixer --all-files` | **Closed** (f852d57; #45) |
+| 42 | ruff-format drift | S | `ruff format scripts/detect_diamond_deps.py` | **Closed** (f852d57; #45) |
+| 43 | MD040 unlabeled fences | S | Add language labels to bare fences in ARCHITECTURE.md/API.md/Bug Report | **Closed** (f852d57; #45) |
 
 ### Medium (1-5 days)
 
@@ -242,7 +247,7 @@ Pass 5 item now resolved:
 | 33 | JSON record serialization duplicated 4x | M | Extracted to `src/fmt/json_record.zig`; schema reconciled | **Closed** (pass 5) |
 | 34 | Text record formatting duplicated 2x | M | Extracted to `src/fmt/text_record.zig` | **Closed** (pass 5) |
 | 35 | JSON schema inconsistency | M | Reconciled to flat attrs + flat source via shared json_record.zig | **Closed** (pass 5) |
-| 48 | All 8 examples/*.zig broken + not wired into build | M | Rename `@import("slog")` to `"slogz"`, migrate to Zig 0.16 writer APIs, add example build steps to build.zig so CI compiles them | **Open** (NEW-9; gap-sync owns issue) |
+| 48 | All 8 examples/*.zig broken + not wired into build | M | Rename `@import("slog")` to `"slogz"`, migrate to Zig 0.16 writer APIs, add example build steps to build.zig so CI compiles them | **Closed** (2be80a9, 641fb3b, 8cc6a56; #42) |
 
 ### Strategic (> 5 days)
 

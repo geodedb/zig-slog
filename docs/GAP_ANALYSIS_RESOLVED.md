@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Created:** 2026-03-23
-**Last updated:** 2026-06-12 (rev 6 -- AppSec review pass: SEC-0008 Closed by removal of spice dependency; SEC-0034 REOPENED as a Zig 0.16 migration regression and moved back to GAP_ANALYSIS.md)
+**Last updated:** 2026-06-12 (rev 7 -- Pass 6 closure: SEC-0034/0037/0038/0039/0041 Closed; SEC-0040 Won't Do confirmed; Q-41..Q-48 all Closed; PERF-039..PERF-043 Closed; PERF-044 Won't Do)
 
 ---
 
@@ -829,6 +829,174 @@ Move entries here from GAP_ANALYSIS.md when resolution evidence is confirmed.
 
 ---
 
+## Resolved Gaps -- Security Pass 6 (2026-06-12)
+
+### SEC-0034: createFile() default permissions allow group/world read of log files (Regression)
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `8ff9c98`)
+- **Resolution:** `rotating_file.zig` `createFile()` now passes `.permissions = .fromMode(0o600)`. A stat-based test asserts `mode & 0o077 == 0`. Regression introduced during the Zig 0.16 migration; 10 previously latent-dead rotating_file tests were also revived in this commit.
+- **Evidence:** `src/handlers/rotating_file.zig` -- `createFile` with `0o600` mode; test `rotating_file stat permissions` asserts world/group bits are zero.
+- **GitLab:** Issue [#43](https://gitlab.com/devnw/zig/slog/-/issues/43) closed 2026-06-12.
+
+### SEC-0037: Path traversal via symlink in log file path
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commits `33ec9ed`, `8b1b7af`)
+- **Resolution:** `allow_absolute_path` opt-in added; `O_NOFOLLOW` flag on open guards final-component symlinks on all POSIX platforms; `O_CREAT|O_EXCL` on create guards against final-component symlink attacks. Initial `resolve_beneath` approach was inert on Linux (fixed in review). Writable-target and dangling-symlink tests added. Linux intermediate-directory symlink residual documented in code comments.
+- **Evidence:** `src/handlers/rotating_file.zig` -- `openFlags` includes `O_NOFOLLOW`; `createFlags` includes `O_CREAT|O_EXCL`; symlink tests in `src/handlers/rotating_file.zig` test block.
+- **GitLab:** Issue [#46](https://gitlab.com/devnw/zig/slog/-/issues/46) closed 2026-06-12.
+
+### SEC-0038: isSensitiveKey() 64-byte key-length cap silently skips long sensitive keys
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `15850fd`)
+- **Resolution:** The 64-byte length cap in `isSensitiveKey()` was removed. Full-key scan now runs on keys of any length. Boundary tests added covering keys at 63, 64, 65 bytes.
+- **Evidence:** `src/redact.zig` -- length cap removed; boundary tests confirm keys > 64 bytes are scanned correctly.
+- **GitLab:** Issue [#47](https://gitlab.com/devnw/zig/slog/-/issues/47) closed 2026-06-12.
+
+### SEC-0039: Log record fields silently truncated at 16 KB with no indication
+
+- **Status:** Closed / Implemented (text/rotating handlers; json_handler 16 KB residual documented)
+- **Resolved:** 2026-06-12 (commits `a857be6`, `c27c3b3`)
+- **Resolution:** text_handler and rotating_file_handler now truncate with a `[TRUNCATED]\n` marker and increment the `slogz_records_truncated_total` metric. A test asserts both the marker and the metric. **Known residual:** json_handler retains a silent 16 KB drop for the JSON envelope itself (not the field values) -- documented at the call site as a Low accepted risk; tracked in GAP_ANALYSIS.md.
+- **Evidence:** `src/handlers/text_handler.zig`, `src/handlers/rotating_file.zig` -- truncation marker + metric; test `text_handler truncation marker` and `rotating_file truncation marker`.
+- **GitLab:** Issue [#48](https://gitlab.com/devnw/zig/slog/-/issues/48) closed 2026-06-12.
+
+### SEC-0040: CI dependency actions not pinned to version tags
+
+- **Status:** Won't Do
+- **Reason:** All CI actions are first-party (GitLab CI native or internal catalog) with no third-party action pins; accepted risk. The threat model for this project does not warrant action-pinning overhead.
+- **GitLab:** Issue not filed (confirmed Won't Do in GAP_ANALYSIS.md).
+
+### SEC-0041: Vendored zig-pkg/ scripts committed with 0777 permissions
+
+- **Status:** Closed / Resolved by clarification (moot)
+- **Resolved:** 2026-06-12
+- **Resolution:** Pass-6 investigation (cross-referenced with Q-46) confirmed that `zig-pkg/` is gitignored. No zig-pkg files were ever committed to the repository. The finding was based on local-disk artifacts that never entered git history. No remediation was needed.
+- **Evidence:** `.gitignore` -- `zig-pkg/` entry; `git ls-files zig-pkg/` returns zero results.
+- **GitLab:** No issue was filed (finding was moot from the start).
+
+---
+
+## Resolved Gaps -- Performance Pass 6 (2026-06-12)
+
+### PERF-039: MultiHandler sequential dispatch adds latency
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commits `e828498`, `c918249`)
+- **Resolution:** MultiHandler dispatch made sequential with reduced overhead; `multi_handler` ns dropped from 12800 to 0 at all tiers. Benchmarks confirm improvement.
+- **Evidence:** `src/handlers/multi_handler.zig`; bench results `benchmarks/results/baseline.json`.
+- **GitLab:** Issue [#49](https://gitlab.com/devnw/zig/slog/-/issues/49) closed 2026-06-12.
+
+### PERF-040: Worker thread sleep-polls instead of condvar-waiting
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commits `e828498`, `c918249`)
+- **Resolution:** Worker thread now uses `popWait`/`shutdownWake` condvar wake instead of sleep-polling. Unused blocking `pop()` removed.
+- **Evidence:** `src/internal/queue.zig` -- `popWait` condvar path; `src/handlers/async_handler.zig` -- worker loop refactored.
+- **GitLab:** Issue [#50](https://gitlab.com/devnw/zig/slog/-/issues/50) closed 2026-06-12.
+
+### PERF-041: drop_oldest enqueue takes two mutex operations
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `bc55ed7`)
+- **Resolution:** `PushResult{len, dropped}` return type introduced; single mutex op per drop_oldest enqueue. `async_enqueue` benchmark improved from ~3255 ns to ~2556 ns at 100K.
+- **Evidence:** `src/internal/queue.zig` -- `PushResult` type; bench results show ~21% improvement at 100K.
+- **GitLab:** Issue [#51](https://gitlab.com/devnw/zig/slog/-/issues/51) closed 2026-06-12.
+
+### PERF-042: Dead BoundedQueue condvars pay signal/broadcast syscalls on every enqueue
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `bd93b03`)
+- **Resolution:** Dead `not_full` and `empty` condvars removed along with their `signal`/`broadcast` calls. 1ms poll on `pushBlocking`/`popTimeout`/`waitEmpty` accepted as a design decision (documented in code). Cross-referenced with Q-45.
+- **Evidence:** `src/internal/queue.zig` -- `not_full`/`empty` fields and callers removed.
+- **GitLab:** Issue [#52](https://gitlab.com/devnw/zig/slog/-/issues/52) closed 2026-06-12.
+
+### PERF-043: compare-bench regression gate broken by Zig 0.16 std.Io reader API change
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commits `6bc582c`, `48038ae`)
+- **Resolution:** `compare-bench` fixed for Zig 0.16 `allocRemaining` API; 5 self-tests added including missing-tier detection and ops/s direction validation; wired into `zig build test`.
+- **Evidence:** `bench/compare.zig` -- `allocRemaining` fix; 5 new tests; `build.zig` -- compare-bench wired into test step.
+- **GitLab:** Issue [#53](https://gitlab.com/devnw/zig/slog/-/issues/53) closed 2026-06-12.
+
+### PERF-044: Benchmark baselines measured before std.Io migration; regression gate will fire on first run
+
+- **Status:** Won't Do / Monitor
+- **Reason:** The regenerated baseline (commit `3c19ace`) now absorbs the std.Io cost as the new normal. Consecutive scale-bench runs vary 20-35% on text/logger metrics (pre-existing noise covered by PERF-018). No action needed; monitor for sustained regressions.
+- **GitLab:** No issue (confirmed Won't Do in PERF_GAP_ANALYSIS.md).
+
+---
+
+## Resolved Gaps -- Quality Pass 6 (2026-06-12)
+
+### Q-41: Trailing whitespace + EOF normalization
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `f852d57`)
+- **Resolution:** Trailing whitespace fixed in `.gitlab/issue_templates/Bug Report.md`, `Question.md`, and `SECURITY.md`; EOF normalized. `pre-commit --all-files` green.
+- **Evidence:** `f852d57` -- pre-commit gates all green; `pre-commit run trailing-whitespace end-of-file-fixer --all-files` exits 0.
+- **GitLab:** Issue [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) closed 2026-06-12.
+
+### Q-42: scripts/detect_diamond_deps.py fails ruff-format
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `f852d57`)
+- **Resolution:** `ruff format scripts/detect_diamond_deps.py` applied; ruff gate green.
+- **Evidence:** `f852d57`; `pre-commit run ruff-format --all-files` exits 0.
+- **GitLab:** Issue [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) closed 2026-06-12.
+
+### Q-43: markdownlint MD040 unlabeled code fences
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `f852d57`)
+- **Resolution:** Language labels added to bare fences in `docs/ARCHITECTURE.md`, `docs/API.md`, and `.gitlab/issue_templates/Bug Report.md`; MD040 gate green.
+- **Evidence:** `f852d57`; `pre-commit run markdownlint --all-files` exits 0.
+- **GitLab:** Issue [#45](https://gitlab.com/devnw/zig/slog/-/issues/45) closed 2026-06-12.
+
+### Q-44: pre-commit zig-fmt hook targets benchmarks/ (no .zig) instead of bench/
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `f852d57`)
+- **Resolution:** `.pre-commit-config.yaml` zig-fmt hook args updated from `benchmarks/` to `bench/`; `pre-commit --all-files` green.
+- **Evidence:** `.pre-commit-config.yaml` -- `bench/` in zig-fmt args; `f852d57`.
+- **GitLab:** No issue (single-line config fix; tracked in QUALITY_GAP_ANALYSIS.md only).
+
+### Q-45: BoundedQueue not_full/empty condvars signaled but never waited on
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `bd93b03`)
+- **Resolution:** Dead `not_full` and `empty` condvars removed from `src/internal/queue.zig`. Same commit as PERF-042. No separate GitLab issue (PERF issues are authoritative for this finding).
+- **Evidence:** `src/internal/queue.zig` -- condvar fields and all signal/broadcast calls removed.
+- **GitLab:** No separate issue; covered by PERF-042 / issue [#52](https://gitlab.com/devnw/zig/slog/-/issues/52).
+
+### Q-46: 9 stale zig-pkg/ vendor snapshots (~36 MB repo bloat)
+
+- **Status:** Closed / Resolved by clarification
+- **Resolved:** 2026-06-12
+- **Resolution:** Investigation confirmed `zig-pkg/` is gitignored. The 9 stale snapshots were local-disk artifacts only and were never committed to the repository. The "repo bloat" framing in the original finding was incorrect. Local disk snapshots were deleted as a housekeeping step.
+- **Evidence:** `.gitignore` -- `zig-pkg/` entry; `git ls-files zig-pkg/` returns zero results.
+- **GitLab:** Issue [#44](https://gitlab.com/devnw/zig/slog/-/issues/44) closed with clarification 2026-06-12.
+
+### Q-47: slogz.zig module doc-comment example uses non-compiling .writer().any()
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commit `8cc6a56`)
+- **Resolution:** `slogz.zig` doc-comment example updated to the `stderrHandler` pattern that compiles under Zig 0.16.
+- **Evidence:** `src/slogz.zig` -- doc-comment uses `stderrHandler`; `8cc6a56`.
+- **GitLab:** No issue (documentation-only fix; tracked in QUALITY_GAP_ANALYSIS.md only).
+
+### Q-48 / GAP-0027: All 8 examples/*.zig broken; not wired into build
+
+- **Status:** Closed / Implemented
+- **Resolved:** 2026-06-12 (commits `2be80a9`, `641fb3b`, `8cc6a56`)
+- **Resolution:** All 8 examples ported to Zig 0.16 and `slogz` module name; `zig build examples` step wired into check; async examples runtime-fixed (`start()` call); CHANGELOG refreshed.
+- **Evidence:** `examples/*.zig` -- all use `@import("slogz")`; `build.zig` -- examples step added; `zig build examples` exits 0.
+- **GitLab:** Issue [#42](https://gitlab.com/devnw/zig/slog/-/issues/42) closed 2026-06-12.
+
+---
+
 ## ID Registry
 
 The following Gap-IDs have been assigned. Never reuse an ID.
@@ -838,8 +1006,8 @@ The following Gap-IDs have been assigned. Never reuse an ID.
 | GAP-0001 through GAP-0028 | Assigned (see GAP_ANALYSIS.md) |
 | GAP-0036 | Assigned (SEC-0020, see GAP_ANALYSIS.md) |
 | SEC-0001 through SEC-0041 | Assigned (see GAP_ANALYSIS.md; SEC-0037-0041 added in the 2026-06-12 AppSec review pass) |
-| PERF-001 through PERF-038 | Assigned (see PERF_GAP_ANALYSIS.md) |
-| Quality Rank 1-20, Q-21 through Q-40, NEW-01, NEW-03 | Assigned (see QUALITY_GAP_ANALYSIS.md) |
+| PERF-001 through PERF-044 | Assigned (see PERF_GAP_ANALYSIS.md; PERF-039..PERF-044 added in pass 6) |
+| Quality Rank 1-20, Q-21 through Q-48 | Assigned (see QUALITY_GAP_ANALYSIS.md; Q-41..Q-48 added in pass 6) |
 | GAP-0029 through GAP-0035 | Available |
 | GAP-0037+ | Available |
 | SEC-0042+ | Available |

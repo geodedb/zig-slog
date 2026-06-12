@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main (commit bd50a7f)
-**Last updated:** 2026-06-12 (rev 8 -- AppSec review pass: SEC-0034 REOPENED as Zig 0.16 migration regression; SEC-0037/0038/0039/0040/0041 added; SEC-0008 Closed by removal of spice dependency)
+**Last updated:** 2026-06-12 (rev 9 -- pass-6 closure: SEC-0034/0037/0038/0039 Closed; SEC-0041 Closed/moot (zig-pkg gitignored); SEC-0040 remains Won't Do)
 **Analyst:** AppSec Code Review (`docs/APPSEC_REVIEW_2026-06-12.md`) + Claude Opus 4.8 (automated scoring); prior Phase 3 Adversarial Review
 **Methodology:** Risk Score = Impact(1-5) x Likelihood(1-5) x 4
 
@@ -14,28 +14,28 @@
 |----------|-------|--------|---------|----------|------|
 | Critical | 2 | 2 | 0 | 0 | 0 |
 | High | 8 | 6 | 0 | 2 | 0 |
-| Medium | 15 | 10 | 0 | 3 | 2 |
-| Low | 14 | 11 | 0 | 1 | 2 |
-| Info | 2 | 1 | 0 | 0 | 1 |
-| **Total** | **41** | **30** | **0** | **6** | **5** |
+| Medium | 15 | 12 | 0 | 3 | 0 |
+| Low | 14 | 13 | 0 | 1 | 0 |
+| Info | 2 | 2 | 0 | 0 | 0 |
+| **Total** | **41** | **35** | **0** | **6** | **0** |
 
-### Open Items (Stack-Ranked by Risk Score)
+### Open Items
 
-1. **SEC-0034** (Medium, Score 36) -- **REGRESSION.** Rotating log files created world-readable; the 0o600 mode (claimed Closed in pass 5) was lost in the Zig 0.16 migration (commit `fa0de64`). `rotating_file.zig:112`. Maps to APPSEC-01. Issue [#43](https://gitlab.com/devnw/zig/slog/-/issues/43).
-2. **SEC-0037** (Medium, Score 36) -- Log path symlink-following + unconstrained absolute writes; SEC-0007's symlink acceptance criterion never met. `rotating_file.zig:89-99,112`. Maps to APPSEC-02. Issue [#46](https://gitlab.com/devnw/zig/slog/-/issues/46).
-3. **SEC-0039** (Low, Score 16) -- Silent whole-record drop when a >8 KB rendered record hits the 8 KB handler buffer (64 KB record budget); audit-integrity loss. `text_handler.zig:50`, `rotating_file.zig:271-276`. Maps to APPSEC-04. Issue [#48](https://gitlab.com/devnw/zig/slog/-/issues/48).
-4. **SEC-0040** (Low, Score 16) -- CI catalog components pinned to mutable version tags (`@v1.7.1`) not commit SHAs. `.gitlab-ci.yml:11-24`. Accepted-risk candidate (see Won't Do rationale).
-5. **SEC-0038** (Low, Score 12) -- `isSensitiveKey` scans only the first 64 bytes of a key; redaction bypass for long keys. `src/util/redact.zig:81-100`. Maps to APPSEC-03. Issue [#47](https://gitlab.com/devnw/zig/slog/-/issues/47).
+**All items resolved as of pass-6 closure (2026-06-12).** Zero open findings.
 
-(**SEC-0041** -- Info/Low, Score 4 -- vendored thread_pool scripts committed mode 0777; informational, recorded under Findings by Area.)
+- **SEC-0034** Closed -- commits `8ff9c98`; `.permissions = .fromMode(0o600)` restored; stat test asserts `mode & 0o077 == 0`. GitLab #43 closed.
+- **SEC-0037** Closed -- commits `33ec9ed`, `8b1b7af`; `allow_absolute_path` opt-in; O_NOFOLLOW + O_CREAT|O_EXCL guard final-component symlinks on all POSIX; writable-target + dangling-symlink tests. GitLab #46 closed.
+- **SEC-0038** Closed -- commit `15850fd`; full-key `isSensitiveKey` scan (64-byte cap removed); boundary tests. GitLab #47 closed.
+- **SEC-0039** Closed (with known residual) -- commits `a857be6`, `c27c3b3`; text/rotating truncate with `[TRUNCATED]\n` marker + `slogz_records_truncated_total` metric + test. **Known residual:** json_handler 16 KB stack buffer still silently drops oversized records at the call site; documented in code and recorded below as Low residual. GitLab #48 closed.
+- **SEC-0040** Won't Do (confirmed) -- accepted risk; first-party `devnw/ci-catalog`.
+- **SEC-0041** Closed/moot -- `zig-pkg/` is gitignored local cache (per pass-6 Q-46 investigation); finding is moot since no files were ever committed; issue resolved by clarification.
 
-### Immediate Actions Required
+### Notes
 
 - **No secrets are currently leaked** -- no rotation required.
-- **SEC-0034 is the priority item:** an explicit `0o600` permission mode must be re-added to `createFile` in `rotating_file.zig` (lost in the Zig 0.16 migration). Until fixed, rotating log files and their backups are world-readable on default-umask POSIX hosts.
-- **SEC-0008 is Closed by removal:** the `spice` dependency was deleted entirely (commit `97c5c59`) and replaced by `thread_pool` pinned by commit SHA + content hash. The prior Blocked status is obsolete. GitLab issue #29 closed with evidence. Moved to GAP_ANALYSIS_RESOLVED.md.
-- **Process action:** run a one-time reconciliation of every `**Closed**` SEC-* item against HEAD to catch any other fixes lost in the 0.16 migration (SEC-0034 proves at least one regressed).
+- **SEC-0008 is Closed by removal:** the `spice` dependency was deleted entirely (commit `97c5c59`) and replaced by `thread_pool` pinned by commit SHA + content hash. GitLab issue #29 closed.
 - Plaintext TCP/UDP transport (SEC-0004/0016/0026/0029) remains accepted Won't Do (TLS exceeds library scope); restated as residual risk only.
+- **json_handler 16 KB silent-drop residual (SEC-0039 partial scope):** json_handler uses a 16 KB stack buffer; records exceeding this are silently dropped at the call site. Documented in code. Not a new issue; recorded here for traceability. Low severity.
 
 ---
 
@@ -76,14 +76,14 @@
 | 31 | SEC-0031 | Low | 16 | Logger name and source_file not sanitized in text handler | text_handler.zig | CWE-117 / A03:2021 | text_handler.zig:67-69 | sanitizeOutput applied to rec.logger in text handlers | -- | 2026-09-21 | **Closed** (pass 5: logger name sanitized via writeSyslogName in text handlers) |
 | 32 | SEC-0032 | Low | 16 | Syslog hostname written raw, bypassing writeSyslogName | syslog_rfc5424.zig | CWE-117 / A03:2021 | syslog_rfc5424.zig:136 vs 141 | hostname now sanitized via writeSyslogName | -- | 2026-09-21 | **Closed** (pass 5: hostname routed through writeSyslogName) |
 | 33 | SEC-0033 | Low | 16 | Data race on Level field in setLevel across handlers | text_handler.zig, json_handler.zig, all handlers | CWE-362 / A04:2021 | text_handler.zig:149-151, rotating_file.zig:335-337 | Atomic Value used for level across all 12 handlers | -- | 2026-09-21 | **Closed** (pass 5: non-atomic level fixed across all 12 handlers using atomic Value; combined fix with PERF-031) |
-| 34 | SEC-0034 | Medium | 36 | Rotating log files created world-readable (0o600 mode lost in Zig 0.16 migration) | rotating_file.zig | CWE-276,732 / A02:2025 | rotating_file.zig:112 | Re-add explicit `.permissions = 0o600` to createFile | -- | 2026-09-10 | **Open / REGRESSION** (pass 5 fix reverted by fa0de64; #43; APPSEC-01) |
+| 34 | SEC-0034 | Medium | 36 | Rotating log files created world-readable (0o600 mode lost in Zig 0.16 migration) | rotating_file.zig | CWE-276,732 / A02:2025 | rotating_file.zig:112 | Re-add explicit `.permissions = 0o600` to createFile | -- | 2026-09-10 | **Closed** (8ff9c98; `.permissions = .fromMode(0o600)` restored; stat test asserts mode&0o077==0; 10 latent rotating_file tests revived; #43 closed) |
 | 35 | SEC-0035 | Low | 16 | UDP truncation produces malformed JSON | udp_sink.zig | CWE-404 / A09:2021 | udp_sink.zig:80 | Oversized records dropped instead of truncated | -- | 2026-09-21 | **Closed** (pass 5: UDP oversized records dropped with metrics counter instead of truncated) |
 | 36 | SEC-0036 | Low | 8 | JSON key collision via duplicate keys or sanitize-to-same-string | json_handler.zig, sanitize.zig | CWE-20 / A03:2021 | sanitize.zig:17-27, json_handler.zig:123-148 | Collision risk documented in sanitize.zig | -- | 2026-09-21 | **Closed** (pass 5: key collision documented as known limitation in sanitize.zig) |
-| 37 | SEC-0037 | Medium | 36 | Log path symlink-following / unconstrained absolute writes (SEC-0007 criterion unmet) | rotating_file.zig | CWE-22,59,61 / A01:2025 | rotating_file.zig:89-99,112 | Reject absolute/escaping paths; open relative to base Dir with resolve_beneath; refuse symlinked final component | -- | 2026-09-10 | **Open** (#46; APPSEC-02) |
-| 38 | SEC-0038 | Low | 12 | Auto-redaction blind spot for keys longer than 64 bytes | redact.zig | CWE-532 / A09:2025 | redact.zig:81-100 | Scan entire key; remove 64-byte cap and scratch buffer | -- | 2026-12-09 | **Open** (#47; APPSEC-03) |
-| 39 | SEC-0039 | Low | 16 | Silent whole-record drop when rendered size exceeds 8KB handler buffer | text_handler.zig, rotating_file.zig | CWE-778,755 / A09,A10:2025 | text_handler.zig:50, rotating_file.zig:271-276 | Size format buffers to MAX_RECORD_SIZE or truncate-with-marker; add dropped/truncated metric | -- | 2026-12-09 | **Open** (#48; APPSEC-04) |
+| 37 | SEC-0037 | Medium | 36 | Log path symlink-following / unconstrained absolute writes (SEC-0007 criterion unmet) | rotating_file.zig | CWE-22,59,61 / A01:2025 | rotating_file.zig:89-99,112 | Reject absolute/escaping paths; open relative to base Dir with resolve_beneath; refuse symlinked final component | -- | 2026-09-10 | **Closed** (33ec9ed, 8b1b7af; allow_absolute_path opt-in; O_NOFOLLOW open + O_CREAT\|O_EXCL create guard final-component symlinks on all POSIX; writable-target + dangling-symlink tests; Linux intermediate-dir residual documented in code; #46 closed) |
+| 38 | SEC-0038 | Low | 12 | Auto-redaction blind spot for keys longer than 64 bytes | redact.zig | CWE-532 / A09:2025 | redact.zig:81-100 | Scan entire key; remove 64-byte cap and scratch buffer | -- | 2026-12-09 | **Closed** (15850fd; full-key scan, 64-byte cap removed; boundary tests added; #47 closed) |
+| 39 | SEC-0039 | Low | 16 | Silent whole-record drop when rendered size exceeds 8KB handler buffer | text_handler.zig, rotating_file.zig | CWE-778,755 / A09,A10:2025 | text_handler.zig:50, rotating_file.zig:271-276 | Size format buffers to MAX_RECORD_SIZE or truncate-with-marker; add dropped/truncated metric | -- | 2026-12-09 | **Closed** (a857be6, c27c3b3; text/rotating truncate with `[TRUNCATED]\n` marker + slogz_records_truncated_total metric + test; json_handler 16KB residual documented at call site -- accepted Low residual; #48 closed) |
 | 40 | SEC-0040 | Low | 16 | CI catalog components pinned to mutable version tags, not commit SHAs | .gitlab-ci.yml | CWE-1357,494 / A06,A08:2025 | .gitlab-ci.yml:11-24 | Pin `@v1.7.1` includes to commit SHAs (or accept risk for first-party catalog) | -- | -- | **Won't Do** (accepted risk: first-party `devnw/ci-catalog`; recorded for visibility) |
-| 41 | SEC-0041 | Info | 4 | Vendored thread_pool scripts committed mode 0777 | zig-pkg/ | CWE-732 / A05:2025 | zig-pkg/ (vendored thread_pool snapshot) | Tighten committed file modes; stale snapshots tracked by QUALITY NEW-7 | -- | Backlog | **Open** (informational; cross-ref QUALITY NEW-7) |
+| 41 | SEC-0041 | Info | 4 | Vendored thread_pool scripts committed mode 0777 | zig-pkg/ | CWE-732 / A05:2025 | zig-pkg/ (vendored thread_pool snapshot) | Tighten committed file modes; stale snapshots tracked by QUALITY NEW-7 | -- | Backlog | **Closed/moot** (zig-pkg/ is gitignored local cache; no files were ever committed to the repo; finding resolved by clarification per pass-6 Q-46 investigation) |
 
 ---
 
@@ -1593,8 +1593,8 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
 - **Exploit Surface:** Local (filesystem; shared/multi-tenant hosts)
 - **CWE:** CWE-276 (Incorrect Default Permissions), CWE-732
 - **OWASP:** A02:2025 Security Misconfiguration (also A01)
-- **Status:** **Open / REGRESSION** (was Closed in pass 5; mode dropped during Zig 0.16 migration `fa0de64`)
-- **Issue:** [#43](https://gitlab.com/devnw/zig/slog/-/issues/43)
+- **Status:** **Closed** (pass 6 -- commit `8ff9c98`; `.permissions = .fromMode(0o600)` restored; stat test asserts `mode & 0o077 == 0`; 10 latent rotating_file tests revived)
+- **Issue:** [#43](https://gitlab.com/devnw/zig/slog/-/issues/43) -- **closed**
 - **Maps to:** APPSEC-01 (`docs/APPSEC_REVIEW_2026-06-12.md`)
 
 **Summary:** The pass-5 fix that passed explicit `0o600` permissions to `createFile` was **lost during the Zig 0.16 `std.fs` -> `std.Io.Dir` migration** (commit `fa0de64`). The rotating file handler now calls `createFile` with no `permissions` field. Zig 0.16 `std.Io.Dir.CreateFileOptions` defaults `permissions = .default_file` = `0o666` on POSIX, so after the process umask (commonly `022`) the on-disk mode is typically `0o644` -- **world-readable**. The tracking docs (this file and GAP_ANALYSIS_RESOLVED.md) still claimed SEC-0034 was Closed; that claim is reconciled by this rev.
@@ -1739,8 +1739,8 @@ The following findings were discovered during the AppSec code review of HEAD `bd
 - **Exploit Surface:** Local (requires log-path configuration influence)
 - **CWE:** CWE-22 (Path Traversal), CWE-59 (Link Following), CWE-61
 - **OWASP:** A01:2025 Broken Access Control
-- **Status:** **Open** (SEC-0007's symlink acceptance criterion never met)
-- **Issue:** [#46](https://gitlab.com/devnw/zig/slog/-/issues/46)
+- **Status:** **Closed** (pass 6 -- commits `33ec9ed`, `8b1b7af`; `allow_absolute_path` opt-in added; O_NOFOLLOW open + O_CREAT|O_EXCL create guard final-component symlinks on all POSIX; initial resolve_beneath approach was inert on Linux -- fixed in review; writable-target + dangling-symlink tests; Linux intermediate-dir residual documented in code)
+- **Issue:** [#46](https://gitlab.com/devnw/zig/slog/-/issues/46) -- **closed**
 - **Maps to:** APPSEC-02 (`docs/APPSEC_REVIEW_2026-06-12.md`); relates to SEC-0007
 
 **Summary:** `validatePath` blocks only empty paths and the `..` substring. It does not prevent the log path from being a symlink to a sensitive location, and it accepts absolute paths. SEC-0007 was marked Closed, but its acceptance criterion "symlinks in the path do not allow escaping the intended directory" was never satisfied.
@@ -1792,8 +1792,8 @@ fn validatePath(path: []const u8) !void {
 - **Exploit Surface:** All handlers (log output); requires an unusually long key
 - **CWE:** CWE-532 (Insertion of Sensitive Information into Log File)
 - **OWASP:** A09:2025 Logging/Alerting Failures
-- **Status:** **Open**
-- **Issue:** [#47](https://gitlab.com/devnw/zig/slog/-/issues/47)
+- **Status:** **Closed** (pass 6 -- commit `15850fd`; full-key `isSensitiveKey` scan implemented, 64-byte cap removed; boundary tests added)
+- **Issue:** [#47](https://gitlab.com/devnw/zig/slog/-/issues/47) -- **closed**
 - **Maps to:** APPSEC-03 (`docs/APPSEC_REVIEW_2026-06-12.md`)
 
 **Summary:** `isSensitiveKey` lowercases and scans only `key[0..@min(key.len, 64)]` (`lower_buf: [64]u8`). A sensitive pattern (e.g. `api_key`, `password`) whose first character sits at offset >= 64 is never matched, so the value is not redacted. `record.zig` caps the whole record at 64 KB but imposes no per-key length limit, so a 64-byte-prefixed sensitive key is well within budget.
@@ -1828,8 +1828,8 @@ fn validatePath(path: []const u8) !void {
 - **Exploit Surface:** All text/rotating handlers (audit integrity)
 - **CWE:** CWE-778 (Insufficient Logging), CWE-755
 - **OWASP:** A09 / A10:2025
-- **Status:** **Open**
-- **Issue:** [#48](https://gitlab.com/devnw/zig/slog/-/issues/48)
+- **Status:** **Closed** (pass 6 -- commits `a857be6`, `c27c3b3`; text/rotating handlers now truncate oversized records with `[TRUNCATED]\n` marker and increment `slogz_records_truncated_total` metric; truncation test added. **Known residual:** json_handler 16 KB stack buffer still silently drops oversized records at the call site; documented in code, accepted Low residual.)
+- **Issue:** [#48](https://gitlab.com/devnw/zig/slog/-/issues/48) -- **closed**
 - **Maps to:** APPSEC-04 (`docs/APPSEC_REVIEW_2026-06-12.md`)
 
 **Summary:** `logger.log` admits records up to `MAX_RECORD_SIZE = 64 * 1024` (`record.zig:14,51-52`), but the text and rotating-file handlers render into an 8 KB fixed buffer (`text_handler.zig:50`, `rotating_file.zig:271`: `var buf: [8192]u8`). When the rendered line exceeds 8 KB, `writeTextRecord` to the `.fixed` writer fails with `error.NoSpaceLeft` and the handler executes `... catch return error.WriteFailed` (`rotating_file.zig:271-276`), discarding the entire record.
@@ -1897,10 +1897,10 @@ fn validatePath(path: []const u8) !void {
 - **Exploit Surface:** Repository (vendored snapshot)
 - **CWE:** CWE-732 (Incorrect Permission Assignment for Critical Resource)
 - **OWASP:** A05:2025 Security Misconfiguration
-- **Status:** **Open** (informational)
-- **Cross-reference:** QUALITY tracker NEW-7 (stale `zig-pkg/` snapshots) -- do not duplicate
+- **Status:** **Closed/moot** (pass 6 -- `zig-pkg/` is a gitignored local build cache; these files are never committed to the repository. Per pass-6 Q-46 investigation, the 9 stale snapshots existed only on local disk. The file-mode concern has no basis since git never tracked these files. Finding resolved by clarification.)
+- **Cross-reference:** QUALITY tracker NEW-7 (stale `zig-pkg/` snapshots) -- resolved by same clarification
 
-**Summary:** Vendored `thread_pool` scripts under `zig-pkg/` are committed with permissive `0777` mode bits in the git index. While the on-disk effect is umask-bounded at checkout, committing world-writable/executable modes for vendored scripts is a hygiene/misconfiguration smell.
+**Summary (historical):** Vendored `thread_pool` scripts under `zig-pkg/` were suspected to be committed with permissive `0777` mode bits. While the on-disk effect is umask-bounded at checkout, committing world-writable/executable modes for vendored scripts is a hygiene/misconfiguration smell.
 
 **Impact:** Minimal -- vendored third-party scripts are not invoked by the slog build's hot path; the concern is repository hygiene and the principle of least privilege for committed file modes. No execution path from attacker-controlled log content reaches these files.
 
@@ -2009,7 +2009,7 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 
 - SEC-0006: Log injection via unsanitized messages (High) -- Closed (pass 3)
 - SEC-0007: Path traversal in rotating file (High) -- Closed (`..` only; symlink/absolute criterion tracked as SEC-0037)
-- SEC-0037: Log path symlink-following / unconstrained absolute writes (Medium) -- **Open** (#46; APPSEC-02)
+- SEC-0037: Log path symlink-following / unconstrained absolute writes (Medium) -- **Closed** (33ec9ed, 8b1b7af; O_NOFOLLOW + O_CREAT|O_EXCL guard; symlink tests; #46 closed)
 - SEC-0010: Text handler unescaped string values (Medium) -- Closed
 - SEC-0019: Journald fallback unsanitized stderr (Low) -- Closed
 - SEC-0020: Windows Event Log stderr fallback missing sanitizeOutput() (Medium) -- Closed (pass 3)
@@ -2030,7 +2030,7 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 - SEC-0024: Gitleaks allowlist incomplete (Info) -- Closed (pass 3)
 - SEC-0027: Secrets in message body bypass all redaction (Medium) -- **Closed** (pass 5)
 - SEC-0030: Sensitive key list incomplete (Low) -- **Closed** (pass 5)
-- SEC-0038: Auto-redaction blind spot for keys longer than 64 bytes (Low) -- **Open** (#47; APPSEC-03)
+- SEC-0038: Auto-redaction blind spot for keys longer than 64 bytes (Low) -- **Closed** (15850fd; full-key scan; #47 closed)
 
 ### Memory Safety / Concurrency
 
@@ -2040,14 +2040,14 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 
 ### File System
 
-- SEC-0034: Rotating log files created world-readable (Medium) -- **Open / REGRESSION** (0o600 lost in `fa0de64`; #43; APPSEC-01)
-- SEC-0039: Silent whole-record drop when rendered size exceeds 8KB buffer (Low) -- **Open** (#48; APPSEC-04; also audit-integrity)
+- SEC-0034: Rotating log files created world-readable (Medium) -- **Closed** (8ff9c98; 0o600 restored; stat test; #43 closed)
+- SEC-0039: Silent whole-record drop when rendered size exceeds 8KB buffer (Low) -- **Closed** (a857be6, c27c3b3; [TRUNCATED] marker + metric + test; json_handler residual documented; #48 closed)
 
 ### Supply Chain
 
 - SEC-0008: spice on floating main branch (High) -- **Closed** (resolved by removal, 97c5c59; #29 closed)
 - SEC-0040: CI catalog components pinned to mutable version tags, not commit SHAs (Low) -- **Won't Do** (accepted risk; first-party catalog)
-- SEC-0041: Vendored thread_pool scripts committed mode 0777 (Info) -- **Open** (informational; cross-ref QUALITY NEW-7)
+- SEC-0041: Vendored thread_pool scripts committed mode 0777 (Info) -- **Closed/moot** (zig-pkg/ is gitignored; files never committed; resolved by clarification)
 
 ### Operations / CI-CD
 
@@ -2068,8 +2068,8 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 
 | ID | Finding | Effort | Impact |
 |----|---------|--------|--------|
-| SEC-0034 | **(OPEN/REGRESSION)** Re-add `.permissions = 0o600` to createFile in rotating_file | 30 min | Restores owner-only log files (#43) |
-| SEC-0038 | **(OPEN)** Remove 64-byte scan cap in isSensitiveKey | 20 min | Closes long-key redaction bypass (#47) |
+| SEC-0034 | **Closed** -- `.permissions = .fromMode(0o600)` restored; stat test added (8ff9c98; #43) | 30 min | Done |
+| SEC-0038 | **Closed** -- full-key scan, 64-byte cap removed; boundary tests (15850fd; #47) | 20 min | Done |
 | SEC-0002 | Fix stderrHandler dangling pointer | 1 hour | Eliminates Critical UB |
 | SEC-0008 | Pin spice to tagged release -- **Closed (removed entirely, 97c5c59)** | -- | Supply chain risk eliminated |
 | SEC-0014 | Narrow gitleaks exclusion | 15 min | Improves secret scanning |
@@ -2094,8 +2094,8 @@ The following gaps were discovered during the Phase 3 post-closure verification 
 | SEC-0006 | Sanitize messages/keys/values in rotating_file -- **Closed** (pass 3) | 2 hours | Prevents log injection in rotating files |
 | SEC-0010 | Escape string values in text handler | 2 hours | Prevents value injection |
 | SEC-0007 | Validate rotating file path | 2 hours | Prevents path traversal (`..` only; symlink/absolute criterion now tracked as SEC-0037) |
-| SEC-0037 | **(OPEN)** Constrain log path: reject absolute/escaping/symlinked paths; open relative to base Dir with resolve_beneath | 2-3 hours | Closes SEC-0007 symlink criterion (#46) |
-| SEC-0039 | **(OPEN)** Size handler format buffers to MAX_RECORD_SIZE or truncate-with-marker; add dropped/truncated metric | 1 hour | Prevents silent audit-record loss (#48) |
+| SEC-0037 | **Closed** -- O\_NOFOLLOW + O\_CREAT\|O\_EXCL guard; allow\_absolute\_path opt-in; symlink tests (33ec9ed, 8b1b7af; #46) | 2-3 hours | Done |
+| SEC-0039 | **Closed** -- \[TRUNCATED\] marker + slogz\_records\_truncated\_total metric + test; json\_handler residual documented (a857be6, c27c3b3; #48) | 1 hour | Done |
 | SEC-0011 | Atomic fatal_hook access | 1 hour | Eliminates race condition |
 | SEC-0017 | Add CI build/test stage | 2 hours | Automated regression detection |
 | SEC-0019 | Sanitize journald stderr fallback | 1 hour | Consistent sanitization |
