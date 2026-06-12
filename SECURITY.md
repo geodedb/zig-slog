@@ -11,7 +11,7 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do not** open a public issue
-2. Email security concerns to: security@devnw.com
+2. Email security concerns to: <security@devnw.com>
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce
@@ -25,17 +25,20 @@ We will acknowledge receipt within 48 hours and provide a detailed response with
 This project implements the following security measures:
 
 ### CI/CD Security Scanning
+
 - **SAST**: Static Application Security Testing via GitLab
 - **Secret Detection**: Automated scanning for hardcoded secrets
 - **License Scanning**: Compliance verification for dependencies
 - **Gitleaks**: Enhanced secrets detection
 
 ### Code Security
+
 - Memory-safe Zig implementation
 - External Zig dependencies: `json` and `spice` (no C dependencies)
 - Compile-time safety checks enabled
 
 ### Release Security
+
 - All releases are tagged and signed
 - SPDX license identifiers in all source files
 - Apache-2.0 license
@@ -43,4 +46,3 @@ This project implements the following security measures:
 ## Security Updates
 
 Security updates will be released as patch versions. Subscribe to releases to be notified.
-

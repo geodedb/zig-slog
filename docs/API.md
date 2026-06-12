@@ -94,6 +94,7 @@ const handler = slog.text.init(&ctx);
 ```
 
 Output format:
+
 ```
 2025-01-02T03:04:05.000000Z INFO myapp Message key=value count=42
 ```
@@ -112,6 +113,7 @@ const handler = slog.json.init(&ctx);
 ```
 
 Output format:
+
 ```json
 {"time":"2025-01-02T03:04:05.000000Z","level":"INFO","msg":"Message","logger":"myapp","key":"value","count":42}
 ```

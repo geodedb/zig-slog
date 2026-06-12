@@ -140,6 +140,7 @@ All items resolved. No open risks remain. 23 closed, 15 won't do, 0 open.
 **Perf Impact:** 1-50ms per record for TCP handshake + teardown. At 1000 records/sec, this adds 1-50 seconds of cumulative latency per second -- the sink cannot keep up.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:131-141` -- `sendHttp()` calls `std.net.tcpConnectToAddress(address)` then `defer stream.close()` on every invocation.
 - `src/sinks/http_sink.zig:145` -- sends `Connection: close\r\n` header, explicitly preventing keep-alive.
 - `src/sinks/http_sink.zig:107-109` -- `deinit()` comment: "No persistent connections to close."
@@ -149,6 +150,7 @@ All items resolved. No open risks remain. 23 closed, 15 won't do, 0 open.
 **Fix Guidance:** Store the `std.net.Stream` as a field on Context (like tcp_sink does). Reuse it across calls. Reconnect only on write failure. Send `Connection: keep-alive` instead of `close`.
 
 **Validation Plan:**
+
 ```bash
 # Run bench with HTTP sink against a local server
 python3 -m http.server 8080 &
@@ -176,6 +178,7 @@ ss -s | grep estab
 **Perf Impact:** With default settings (3 retries, 100ms initial backoff, 5000ms max), worst-case block time is ~5.3s. During this time, ALL other threads attempting to log are blocked.
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig:130-131` -- `ctx.mutex.lock(); defer ctx.mutex.unlock();`
 - `src/sinks/tcp_sink.zig:95` -- `std.Thread.sleep(backoff * ns_per_ms)` inside retry loop while mutex held
 - `src/sinks/tcp_sink.zig:107` -- second sleep point on write failure
@@ -185,6 +188,7 @@ ss -s | grep estab
 **Fix Guidance:** Format the record to a local buffer outside the lock. Acquire the lock only for the actual `stream.write()` call. If write fails, release the lock before sleeping, then re-acquire for the next attempt.
 
 **Validation Plan:**
+
 ```bash
 # Simulate TCP sink failure with unreachable endpoint
 # Spawn 10 threads logging concurrently, measure p99 latency
@@ -209,6 +213,7 @@ ss -s | grep estab
 **Perf Impact:** Full HTTP round-trip (typically 5-100ms) plus up to 5s retry backoff, all under lock. Single-threaded effective throughput.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:190-191` -- `ctx.mutex.lock(); defer ctx.mutex.unlock();`
 - `src/sinks/http_sink.zig:229` -- `ctx.sendWithRetry(fbs.getWritten())` called under lock
 - `src/sinks/http_sink.zig:111-129` -- `sendWithRetry()` contains sleep loop
@@ -218,6 +223,7 @@ ss -s | grep estab
 **Fix Guidance:** Format JSON to local buffer outside lock. For the HTTP send, either use a separate send queue or acquire the lock only for the minimal shared state mutation (consecutive_failures counter).
 
 **Validation Plan:**
+
 ```bash
 # Same as PERF-001 validation; measure concurrent throughput
 # Before: effectively single-threaded; After: near-linear scaling with threads
@@ -241,6 +247,7 @@ ss -s | grep estab
 **Perf Impact:** A single unreachable endpoint can freeze a logging thread for 75-127 seconds. Combined with PERF-002/003 (mutex held during I/O), this freezes ALL logging threads.
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig:27` -- `connect_timeout_ms: u32 = 5000` defined but unused
 - `src/sinks/tcp_sink.zig:65-78` -- `connect()` calls `tcpConnectToAddress()` with no timeout parameter
 - `src/sinks/http_sink.zig:29` -- `timeout_ms: u32 = 10000` defined but unused
@@ -251,6 +258,7 @@ ss -s | grep estab
 **Fix Guidance:** After socket creation, call `std.posix.setsockopt` with `SO_RCVTIMEO` and `SO_SNDTIMEO` using the configured timeout values. For connect timeout, use non-blocking connect with poll/select.
 
 **Validation Plan:**
+
 ```bash
 # Point sink at a black-hole IP (e.g., 10.255.255.1) and measure how long connect() blocks
 # Before: ~75-127s; After: configured timeout (e.g., 5s)
@@ -274,6 +282,7 @@ ss -s | grep estab
 **Perf Impact:** Not strictly a latency issue, but a correctness issue that makes the async path unusable. Users who enable async logging lose all structured data, defeating the purpose of structured logging.
 
 **Evidence:**
+
 - `src/handlers/async_handler.zig:93` -- `.attrs = &.{}, // Simplified`
 - `src/handlers/async_handler.zig:114` -- same pattern in drain loop
 - `src/internal/queue.zig:60-88` -- `fromRecord()` serializes attrs into `attrs_buf` with `key=value;` format, but no deserialization exists
@@ -283,6 +292,7 @@ ss -s | grep estab
 **Fix Guidance:** Either: (a) deserialize `attrs_buf` back into a temporary `[]Attr` slice in the worker, or (b) redesign to use an arena allocator and store attrs as proper Attr slices, or (c) pass the original Record's attrs slice if records are guaranteed to outlive the queue (they are not, since QueuedRecord copies data).
 
 **Validation Plan:**
+
 ```bash
 zig build test
 # Add a test that logs a record with attrs through async handler,
@@ -307,6 +317,7 @@ zig build test
 **Perf Impact:** With N threads, effective throughput equals single-thread throughput regardless of N. Under 8 threads, expect ~8x throughput reduction vs. optimal.
 
 **Evidence:**
+
 - `text_handler.zig:49-91` -- lock at 49, format 52-87, write at 90, unlock at 91
 - `json_handler.zig:59-130` -- lock at 59, format 62-125, write at 128, unlock at 130
 - `syslog_rfc5424.zig:117-195` -- lock at 117, format 120-190, write at 193, unlock at 195
@@ -317,6 +328,7 @@ zig build test
 **Fix Guidance:** Format to a thread-local or stack buffer outside the lock. Acquire the mutex only for the final `ctx.writer.writeAll(output)` call. This reduces critical section from ~microseconds to ~nanoseconds for in-memory writers.
 
 **Validation Plan:**
+
 ```bash
 # Multi-threaded benchmark: 8 threads, 100K records each
 # Before: throughput ~= single-thread; After: throughput ~= N * single-thread
@@ -341,6 +353,7 @@ zig build bench  # (after adding multi-threaded bench per PERF-019)
 **Perf Impact:** Correctness bug rather than latency issue. Structured data is silently lost when using network sinks.
 
 **Evidence:**
+
 - `tcp_sink.zig:145-167` -- JSON object has time, level, msg, logger, then endObject(); no attrs loop
 - `http_sink.zig:205-227` -- identical pattern
 - `udp_sink.zig:106-128` -- identical pattern
@@ -351,6 +364,7 @@ zig build bench  # (after adding multi-threaded bench per PERF-019)
 **Fix Guidance:** Add an attrs serialization block after the logger field, matching the pattern in `json_handler.zig:107-122`. Reuse or adapt `writeJsonAttr()`/`writeJsonValue()`.
 
 **Validation Plan:**
+
 ```bash
 zig build test
 # Add tests that send a record with attrs through each network sink
@@ -378,6 +392,7 @@ zig build test
 **Perf Impact:** 12.2MB resident memory for async queue. Most records use <5% of the buffer space (typical record has 2-5 attrs with short keys/values vs. 32 slots of 336 bytes each). Significant memory pressure in embedded or multi-logger scenarios.
 
 **Evidence:**
+
 - `src/internal/queue.zig:160-175` -- QueuedRecord fields: `msg_id_buf: [256]u8`, `message_buf: [1024]u8`, `logger_buf: [128]u8`, `source_file_buf: [256]u8`, `stored_attrs: [MAX_STORED_ATTRS]StoredAttr` (32 * 336 = 10,752 bytes), plus usize/u32/bool fields and padding = ~12,480 bytes
 - `src/internal/queue.zig:32` -- `MAX_STORED_ATTRS = 32`
 - `src/internal/queue.zig:49-66` -- StoredAttr: key_buf[64] + key_len(usize) + value_buf[256] + value_len(usize) = 336 bytes
@@ -389,6 +404,7 @@ zig build test
 **Fix Guidance:** Options: (a) reduce MAX_STORED_ATTRS to 8 or 16 (most records have <8 attrs), (b) reduce MAX_VALUE_LEN from 256 to 128, (c) use variable-length records with an arena allocator, (d) use a ring buffer of bytes instead of a ring buffer of structs.
 
 **Validation Plan:**
+
 ```bash
 # Measure RSS before and after creating async handler
 # Before: ~12.2MB for queue alone; After: target <2MB
@@ -413,6 +429,7 @@ zig build test
 **Perf Impact:** Security issue rather than latency. Log data (potentially containing sensitive information) sent in cleartext when the user explicitly requested HTTPS.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:64` -- `if (std.mem.startsWith(u8, url, "https://"))` sets `is_https = true`
 - `src/sinks/http_sink.zig:103` -- stores `.is_https = is_https` in context
 - `src/sinks/http_sink.zig:131-182` -- `sendHttp()` never checks `self.is_https`; uses plain `tcpConnectToAddress`
@@ -422,6 +439,7 @@ zig build test
 **Fix Guidance:** Either: (a) return `error.HttpsNotSupported` from `Context.init()` when `is_https` is true, or (b) implement TLS using `std.crypto.tls` or a Zig TLS library.
 
 **Validation Plan:**
+
 ```bash
 # Test: attempt to create HttpSink with https:// URL
 # Before: silently accepts, sends cleartext; After: returns error or uses TLS
@@ -445,6 +463,7 @@ zig build test
 **Perf Impact:** With 100 threads and a down endpoint, all 100 threads queue up behind the mutex, each waiting through the full retry cycle. Total serialized wait time = 100 * 5.3s = 530s.
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig:120` -- `self.consecutive_failures += 1` after all retries exhausted
 - No code anywhere checks `consecutive_failures` to skip or fast-fail
 - `src/sinks/tcp_sink.zig:87-122` -- `writeWithRetry()` always executes full retry loop
@@ -454,6 +473,7 @@ zig build test
 **Fix Guidance:** At the top of `writeWithRetry()`, check `consecutive_failures >= threshold` and return error immediately. Reset the counter after a configurable cooldown period. Consider exponential cooldown.
 
 **Validation Plan:**
+
 ```bash
 # Point TCP sink at unreachable endpoint, send 100 records from 10 threads
 # Before: each thread blocks for full retry; After: only first few threads retry, rest fast-fail
@@ -480,6 +500,7 @@ zig build test
 **Perf Impact:** ~14+ write syscalls per record (assuming ~5 attrs). Syscall overhead is ~1-2us each on modern Linux, adding 14-28us per record.
 
 **Evidence:**
+
 - `src/handlers/journald.zig:141` -- `stderr.print("<{d}>", ...)` -- syscall 1
 - `src/handlers/journald.zig:143` -- `stderr.print("{s}: ", ...)` -- syscall 2
 - `src/handlers/journald.zig:145` -- `stderr.print("{s}", ...)` -- syscall 3
@@ -491,6 +512,7 @@ zig build test
 **Fix Guidance:** Format the entire fallback message to a stack-allocated `fixedBufferStream` (like other handlers do), then issue a single `stderr.writeAll()`.
 
 **Validation Plan:**
+
 ```bash
 # Trace syscalls during journald fallback logging
 strace -e write -c zig-out/bin/bench 2>&1 | grep write
@@ -515,6 +537,7 @@ strace -e write -c zig-out/bin/bench 2>&1 | grep write
 **Perf Impact:** For a 256-byte value: 256 format string parse+write calls vs. a single bulk write with a lookup table. Estimated 5-10x slower for bytes values.
 
 **Evidence:**
+
 - `text_handler.zig:133-135` -- `for (b) |byte| { try writer.print("{x:0>2}", .{byte}); }`
 - `journald.zig:169-171` -- identical pattern
 - `syslog_rfc5424.zig:244-246` -- identical pattern
@@ -525,6 +548,7 @@ strace -e write -c zig-out/bin/bench 2>&1 | grep write
 **Fix Guidance:** Use a precomputed hex lookup table (like json_handler does at line 166) in all handlers. Better yet, extract a shared `hex.encode()` utility and write the result in bulk.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark: format 1000 records each with a 256-byte attr
 # Before: measure ns/op for bytes attrs; After: expect 5-10x improvement on bytes path
@@ -548,6 +572,7 @@ strace -e write -c zig-out/bin/bench 2>&1 | grep write
 **Perf Impact:** At high throughput (e.g., 10K records/sec), this is 10K syscalls/sec. With buffering, this could be reduced to ~10-100 syscalls/sec.
 
 **Evidence:**
+
 - `src/handlers/rotating_file.zig:135-141` -- `write()` calls `f.write(data)` directly
 - No `std.io.BufferedWriter` wrapper around the file
 
@@ -556,6 +581,7 @@ strace -e write -c zig-out/bin/bench 2>&1 | grep write
 **Fix Guidance:** Wrap the `std.fs.File` in a `std.io.BufferedWriter` with a configurable buffer size (e.g., 64KB). Flush on rotation check, explicit flush(), or when buffer is full.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark: write 100K records to a rotating file
 # Before: measure syscall count with strace; After: expect 100-1000x fewer write() syscalls
@@ -582,6 +608,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Perf Impact:** Up to 1ms unnecessary latency on flush. Wastes CPU cycles on busy polling. With frequent flushes, accumulates measurable overhead.
 
 **Evidence:**
+
 - `src/handlers/async_handler.zig:196-204` -- `while (ctx.queue.len() > 0) { std.time.sleep(1 * ns_per_ms); }`
 - `queue.len()` acquires the queue's internal mutex on each call (line 234-238)
 
@@ -590,6 +617,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Fix Guidance:** Add a `drain_complete` condition variable to the Context. The worker thread signals it when the queue becomes empty after processing. `flush()` waits on this condition variable with the specified timeout.
 
 **Validation Plan:**
+
 ```bash
 # Measure flush latency with a single queued record
 # Before: up to 1ms; After: completes within worker loop iteration time (~100us)
@@ -613,6 +641,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Perf Impact:** Double mutex acquisition overhead per enqueue. More importantly, the `was_full` check is a TOCTOU race: the queue may become full (or not full) between the check and the push, leading to incorrect drop counting.
 
 **Evidence:**
+
 - `src/handlers/async_handler.zig:129` -- `self.mutex.lock()` (context mutex)
 - `src/handlers/async_handler.zig:130` -- `const was_full = self.queue.len() >= self.queue.buffer.len`
 - `src/handlers/async_handler.zig:131` -- `self.mutex.unlock()`
@@ -623,6 +652,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Fix Guidance:** Use the queue's internal `dropped` counter (already tracked at `queue.zig:151`) instead of the external `was_full` check. After `pushDropOldest()`, compare `queue.droppedCount()` to the previous value to detect drops.
 
 **Validation Plan:**
+
 ```bash
 # Stress test: 16 threads, queue_size=4, verify drop count accuracy
 # Before: drop count may be inaccurate; After: exact match with actual drops
@@ -646,6 +676,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Perf Impact:** For records with many attributes, this doubles the iteration count. Only f64 values need JSON validation (NaN/Inf check).
 
 **Evidence:**
+
 - `src/handlers/json_handler.zig:53-57` -- `for (rec.attrs) |attr| { if (!attr.value.isValidJson()) return error.InvalidRecord; }`
 - `src/value.zig:110-115` -- `isValidJson()` only checks f64 values; all other types return true
 
@@ -654,6 +685,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Fix Guidance:** Remove the pre-validation loop. In `writeJsonValue()`, check `isValidJson()` for the `.f64` case and return error or write `null` inline.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark JSON handler with 20 string attrs (no f64)
 # Before: 2 passes over attrs; After: 1 pass
@@ -679,6 +711,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Perf Impact:** Adds compilation time for 764 LOC + spice dependency resolution on every build. No runtime impact since it is never called from internal handlers.
 
 **Evidence:**
+
 - `build.zig:39-49` -- parallel_mod is created and linked
 - No `@import("parallel")` in any src/ file other than the module definition itself
 
@@ -687,6 +720,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Fix Guidance:** N/A -- intentionally kept as published module.
 
 **Validation Plan:**
+
 ```bash
 # Measure build time with and without parallel module
 time zig build 2>&1  # with
@@ -711,6 +745,7 @@ time zig build -Dspice=false 2>&1  # without
 **Perf Impact:** Results vary 10-30% between runs, making it unreliable for detecting performance regressions.
 
 **Evidence:**
+
 - `bench/bench_main.zig:17-18` -- `WARMUP_ITERATIONS = 1000`, `BENCHMARK_ITERATIONS = 100_000`
 - `bench/bench_main.zig:246-254` -- `printResult()` reports only ns/op and ops/sec from a single measurement
 
@@ -719,6 +754,7 @@ time zig build -Dspice=false 2>&1  # without
 **Fix Guidance:** Run multiple timed iterations (e.g., 10 rounds), compute mean, standard deviation, p50, p99. Optionally output in a machine-readable format (JSON) for CI regression detection.
 
 **Validation Plan:**
+
 ```bash
 # Run benchmark 10 times, compare variance
 for i in $(seq 1 10); do zig build bench 2>&1; done | grep TextHandler
@@ -742,6 +778,7 @@ for i in $(seq 1 10); do zig build bench 2>&1; done | grep TextHandler
 **Perf Impact:** Cannot detect regressions in concurrent performance. Mutex contention issues (PERF-006) are invisible to the current benchmark suite.
 
 **Evidence:**
+
 - `bench/bench_main.zig` -- no `std.Thread.spawn` calls anywhere; all benchmarks are sequential
 
 **Root Cause:** Multi-threaded benchmarking was not implemented.
@@ -749,6 +786,7 @@ for i in $(seq 1 10); do zig build bench 2>&1; done | grep TextHandler
 **Fix Guidance:** Add benchmarks that spawn N threads (e.g., 1, 2, 4, 8), each logging 100K records to a shared handler. Report aggregate throughput and per-thread p99 latency.
 
 **Validation Plan:**
+
 ```bash
 # After implementing, run multi-threaded bench and verify throughput scales
 zig build bench -- --threads=8
@@ -771,6 +809,7 @@ zig build bench -- --threads=8
 **Summary:** The Metrics struct previously packed 7 atomic counters (56 bytes) into a single cache line. This has been fixed with `PaddedCounter` using `align(cache_line)`.
 
 **Evidence of fix:**
+
 - `src/metrics/metrics.zig:28` -- `const cache_line = 64;`
 - `src/metrics/metrics.zig:32-34` -- `const PaddedCounter = struct { value: AtomicCounter align(cache_line) = AtomicCounter.init(0), };`
 - `src/metrics/metrics.zig:40-54` -- All 7 Metrics fields now use PaddedCounter type
@@ -792,6 +831,7 @@ zig build bench -- --threads=8
 **Perf Impact:** ~20-50ns per call under contention. Only matters if parallel.zig is actually used (currently dead code per PERF-017).
 
 **Evidence:**
+
 - `src/parallel.zig:74-85` -- `pool_mutex.lock(); defer pool_mutex.unlock();` on every call
 - `src/parallel.zig:80` -- `if (global_pool == null)` check happens after acquiring the lock
 
@@ -800,6 +840,7 @@ zig build bench -- --threads=8
 **Fix Guidance:** Use double-checked locking: first check `global_pool` with an atomic load (no lock). Only acquire the mutex if null, then re-check inside the lock. Alternatively, use `std.once` if available.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark getPool() call overhead
 # Before: ~20-50ns under contention; After: ~1-5ns (atomic load only)
@@ -824,6 +865,7 @@ zig build bench -- --threads=8
 **Perf Impact:** All logging threads serialize on the UDP sink's mutex during both CPU-bound formatting (~8KB JSON formatting) and the I/O-bound UDP send syscall. Effective throughput is single-threaded.
 
 **Evidence:**
+
 - `src/sinks/udp_sink.zig:132-133` -- `ctx.mutex.lock(); defer ctx.mutex.unlock();` acquired before any formatting.
 - `src/sinks/udp_sink.zig:136-179` -- Full JSON formatting (fixedBufferStream, streamingEncoder, field writing) happens under lock.
 - `src/sinks/udp_sink.zig:181-184` -- `ctx.send(fbs.getWritten())` also under lock.
@@ -834,6 +876,7 @@ zig build bench -- --threads=8
 **Fix Guidance:** Move the JSON formatting (lines 136-179) above the mutex acquisition. The `buf`, `fbs`, and `enc` are stack-local variables that do not need mutex protection. Acquire the lock only for `ctx.send()` which uses the shared socket.
 
 **Validation Plan:**
+
 ```bash
 # Multi-threaded benchmark: 8 threads logging to UDP sink
 # Before: throughput ~= single-thread; After: near-linear scaling
@@ -862,6 +905,7 @@ perf lock report
 **Original perf impact:** For each attribute: lowercase O(k) + 15 substring searches each O(k*p). For a record with 10 attrs, this is 150 substring scans. The overhead is small per call (~100-500ns) but is multiplied by every attribute in every record across every handler.
 
 **Evidence:**
+
 - `src/util/redact.zig:34-47` -- `isSensitiveKey()` implementation: `for (sensitive_keys) |sensitive| { if (std.mem.indexOf(u8, lower, sensitive) != null) ... }`
 - `src/util/redact.zig:15-31` -- `sensitive_keys` array has 15 entries
 - Called from: `text_handler.zig:108`, `json_handler.zig:145`, `journald.zig:128,154`, `syslog_rfc5424.zig:225`, `tcp_sink.zig:244`, `http_sink.zig:276`, `udp_sink.zig:172`, `windows_eventlog.zig:112`
@@ -871,6 +915,7 @@ perf lock report
 **Fix Guidance:** Options: (a) compile-time perfect hash set using `std.StaticStringMap`, (b) Aho-Corasick multi-pattern matcher for substring search, (c) sort patterns and use binary search on lowercased key. Option (a) only works for exact matches; current logic uses substring matching so (b) would be the algorithmically correct improvement.
 
 **Validation Plan:**
+
 ```bash
 # Microbenchmark: 100K calls to isSensitiveKey with 10-char keys
 # Before: measure ns/call; After: expect 2-5x improvement
@@ -897,6 +942,7 @@ perf lock report
 **Perf Impact:** Minor. Only affects `.bytes` type attribute values logged through the rotating_file handler. Per-byte format string parsing overhead (~5-10x slower than lookup table) but only on an uncommon code path.
 
 **Evidence:**
+
 - `src/handlers/rotating_file.zig:329-331` -- `for (b) |byte| { try writer.print("{x:0>2}", .{byte}); }` -- same slow pattern that PERF-012 fixed in other handlers.
 - Compare with `src/handlers/text_handler.zig` which now uses `hex_chars` lookup table.
 
@@ -905,6 +951,7 @@ perf lock report
 **Fix Guidance:** Apply the same `hex_chars` lookup table pattern from the PERF-012 fix to `rotating_file.zig:329-331`.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark rotating_file handler with records containing bytes attrs
 # Before: per-byte format parsing; After: O(1) lookup per byte
@@ -930,6 +977,7 @@ perf lock report
 **Perf Impact:** 8-25KB stack consumption per concurrent log call. With 8 threads, worst case ~200KB of active stack. The large stack frames (~16-25KB) evict useful data from L1 (32-48KB) and L2 caches on every call. On systems with small default stack sizes (e.g., 8KB in some embedded contexts), this can cause stack overflow.
 
 **Evidence:**
+
 - `src/handlers/journald.zig:75` -- `var fields_buf: [32][512]u8 = undefined;` = 16,384 bytes
 - `src/handlers/journald.zig:144` -- `var stderr_buf: [8192]u8 = undefined;` = 8,192 bytes -- total ~25KB
 - `src/handlers/json_handler.zig:55` -- `var buf: [16384]u8 = undefined;` = 16,384 bytes + `stack_buf: [256]u8` = ~16.6KB
@@ -941,11 +989,13 @@ perf lock report
 **Root Cause:** Fixed-size buffers were chosen for zero-allocation formatting. The 16KB size accommodates worst-case records but is dramatically oversized for the common case (typical formatted record is <1KB).
 
 **Fix Guidance:**
+
 1. **Reduce default buffers**: Use 4KB default; most records format to <1KB. Truncate or signal overflow for rare oversized records.
 2. **Thread-local reusable buffers**: Allocate a formatting buffer per thread (once) and reuse across calls. Eliminates per-call stack expansion.
 3. **Journald-specific**: Remove dead `fields_buf` code (see PERF-028). The stderr_buf alone at 8KB is sufficient for the fallback path.
 
 **Validation Plan:**
+
 ```bash
 # Measure stack depth per handler with valgrind massif
 valgrind --tool=massif --stacks=yes zig-out/bin/bench
@@ -976,6 +1026,7 @@ zig build test
 **Perf Impact:** Under burst load (e.g., 1000 records queued), the worker processes them one by one with per-record synchronization overhead. A batch drain of N records per wake cycle would amortize the overhead.
 
 **Evidence:**
+
 - `src/handlers/async_handler.zig:98-124` -- Worker loop: `if (ctx.queue.popTimeout(100)) |qr| { ... ctx.inner.handle(&rec) ... }` -- single record per iteration.
 - No batch drain logic; each iteration processes exactly one record then re-enters `popTimeout`.
 
@@ -984,6 +1035,7 @@ zig build test
 **Fix Guidance:** After processing one record from `popTimeout()`, check if more records are immediately available via `tryPop()` in a loop (up to a configurable batch size, e.g., 64). This amortizes the per-wake overhead across multiple records.
 
 **Validation Plan:**
+
 ```bash
 # Burst test: enqueue 10K records, measure drain time
 # Before: 10K pop+signal cycles; After: ~156 batches of 64
@@ -1010,6 +1062,7 @@ zig build test
 **Perf Impact:** For a multi-handler with 2 children (common case: console + file), the record is formatted twice. With 3+ children, the overhead grows linearly. However, since each child typically uses a different format, pre-formatting is not straightforward.
 
 **Evidence:**
+
 - `src/handlers/multi_handler.zig:30-43` -- `for (ctx.handlers) |h| { h.handle(rec) catch ... }` -- each handler independently formats.
 
 **Root Cause:** This is architecturally expected behavior. Each child handler has its own output format, so a shared pre-formatted representation is not feasible without a format negotiation protocol.
@@ -1017,6 +1070,7 @@ zig build test
 **Fix Guidance:** No action recommended for the common case. For users with multiple handlers using the same format, a "tee" handler that formats once and writes to multiple outputs would be a future optimization.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark: multi-handler with 2 text handlers vs. 1 text handler
 # Expected: ~2x formatting time with 2 handlers (confirms linear scaling)
@@ -1041,6 +1095,7 @@ zig build test
 **Perf Impact:** Double the CPU work per journald log call: O(n) field formatting into 16KB fields_buf (lines 75-137, wasted), then O(n) stderr formatting into 8KB stderr_buf (lines 143-162, actual output). The 16KB fields_buf stack allocation is also entirely wasted.
 
 **Evidence:**
+
 - `src/handlers/journald.zig:75-137` -- Builds up to 32 journald fields: `MESSAGE=...`, `PRIORITY=...`, `SYSLOG_IDENTIFIER=...`, per-attr `KEY=value`. This code always executes.
 - `src/handlers/journald.zig:139-141` -- Comment explicitly states: "For now, we write to stderr as a fallback when libsystemd isn't linked".
 - `src/handlers/journald.zig:143-162` -- Stderr fallback always executes, re-formatting the same data into a different format.
@@ -1049,10 +1104,12 @@ zig build test
 **Root Cause:** The journald handler was written with the intent to call `sd_journal_sendv()` using the structured fields, but the native call was never implemented. The fallback path was added as a temporary measure. Since the fallback is not gated behind a condition, both the field-building and stderr formatting always execute.
 
 **Fix Guidance:**
+
 1. **Short term (recommended):** Remove or `#ifdef`-gate the field-building code (lines 75-137) since it is dead code. This eliminates ~16KB stack allocation, the O(n) field formatting, and the key uppercasing work. Only the stderr fallback path should execute.
 2. **Long term:** Implement actual `sd_journal_sendv` via `@cImport` or runtime loading of `libsystemd.so`. When available, call the native API and skip the stderr fallback.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark journald handler before/after removing dead code
 zig build bench
@@ -1079,6 +1136,7 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Perf Impact:** The HTTP sink is unusable at any meaningful log rate. Each record incurs a full TCP handshake (1-50ms) plus teardown. At 100 records/sec, this means 100 simultaneous TCP handshakes per second. At 1000 records/sec, the sink cannot keep up and will drop or block. This is related to PERF-001 but adds the documentation discrepancy as a distinct concern: users may deploy the HTTP sink in production believing they have batching and pooling.
 
 **Evidence:**
+
 - `src/sinks/http_sink.zig:7` -- `//! - JSON payload batching` (claimed but not implemented)
 - `src/sinks/http_sink.zig:10` -- `//! - Connection pooling (simplified)` (claimed but not implemented)
 - `src/sinks/http_sink.zig:127-133` -- `fn sendHttp(self: *Context, data: []const u8) bool { ... const stream = ... std.net.tcpConnectToAddress(address) ... defer stream.close();`
@@ -1089,11 +1147,13 @@ strace -e write -c zig-out/bin/bench 2>&1
 **Root Cause:** The doc comments describe aspirational features that were never implemented. The sink was written as a simple one-shot-per-record HTTP client. No connection is stored on the Context struct (unlike tcp_sink which has a `stream: ?std.net.Stream` field). No batch buffer or record accumulator exists.
 
 **Fix Guidance:**
+
 1. **Immediate:** Remove or correct the misleading doc comments claiming "JSON payload batching" and "Connection pooling".
 2. **Connection pooling:** Add a `stream: ?std.net.Stream` field to Context (matching tcp_sink pattern). Reuse the connection across calls. Send `Connection: keep-alive` instead of `close`. Reconnect on write failure.
 3. **Payload batching:** Add a record buffer (e.g., JSON array or newline-delimited JSON). Flush on: (a) buffer full, (b) configurable max delay, (c) explicit flush. This requires a timer mechanism or piggyback flushing.
 
 **Validation Plan:**
+
 ```bash
 # Start a local HTTP server that counts connections
 python3 -c "
@@ -1133,6 +1193,7 @@ ss -s | grep estab
 **Perf Impact:** TCP worst-case: with default 3 retries and exponential backoff (100ms, 200ms, 400ms), ~700ms under lock. HTTP worst-case: with DNS resolution failures and 3 retries (100ms, 200ms, 400ms + connect timeout), potentially 15+ seconds under lock. During this time, ALL other threads attempting to log are serialized behind the mutex.
 
 **Evidence:**
+
 - `src/sinks/tcp_sink.zig:227-228` -- `ctx.mutex.lock(); defer ctx.mutex.unlock();`
 - `src/sinks/tcp_sink.zig:230` -- `ctx.writeWithRetry(output)` called under lock
 - `src/sinks/tcp_sink.zig:131` -- `std.Thread.sleep(@as(u64, backoff) * std.time.ns_per_ms)` inside retry loop
@@ -1146,6 +1207,7 @@ ss -s | grep estab
 **Fix Guidance:** Release the mutex before sleeping. Pattern: lock -> try write -> if fail, unlock -> sleep -> re-lock -> try again. Alternatively, use a separate "retry state" that does not hold the lock during backoff. The TCP sink's circuit breaker (PERF-010 fix) mitigates repeated retries but does not prevent sleep-under-lock for the first failure.
 
 **Validation Plan:**
+
 ```bash
 # Set up a TCP server that closes connections after 1 byte
 # Run 10 threads logging concurrently through TCP sink
@@ -1172,6 +1234,7 @@ ss -s | grep estab
 **Perf Impact:** This is a correctness/safety issue rather than a latency issue. In Zig, concurrent unsynchronized read/write to the same memory location is undefined behavior. In practice this can manifest as: torn reads (if Level were wider than a machine word, though it is currently u3), stale cached values (CPU core may read old value indefinitely due to lack of memory barrier), or compiler reordering.
 
 **Evidence:**
+
 - `src/handlers/async_handler.zig:57` -- `level: Level,` (plain enum field, not atomic)
 - `src/handlers/async_handler.zig:58` -- `running: std.atomic.Value(bool).init(true),` (contrast: `running` uses atomic)
 - `src/handlers/async_handler.zig:189` -- `if (!rec.level.atLeast(ctx.level)) return;` (read on caller thread)
@@ -1182,6 +1245,7 @@ ss -s | grep estab
 **Fix Guidance:** Change `level: Level` to `level: std.atomic.Value(Level)`. Initialize with `.init(.info)`. Read with `ctx.level.load(.acquire)` in `handle()`. Write with `ctx.level.store(level, .release)` in `setLevel()`. This matches the pattern already used for the `running` field.
 
 **Validation Plan:**
+
 ```bash
 # ThreadSanitizer-style test: spawn 4 threads calling setLevel() concurrently
 # with 4 threads calling handle(). Run for 10 seconds.
@@ -1208,6 +1272,7 @@ zig build test  # after adding concurrency stress test
 **Perf Impact:** This is a correctness/observability issue. Records with >8 attributes silently lose data when passed through the async handler. Users who rely on structured attributes for alerting, debugging, or audit trails will have incomplete data with no indication that truncation occurred.
 
 **Evidence:**
+
 - `src/internal/queue.zig:204` -- `const count = @min(rec.attrs.len, MAX_STORED_ATTRS);` -- silent truncation
 - `src/internal/queue.zig:34` -- `pub const MAX_STORED_ATTRS = 8;`
 - `src/internal/queue.zig:205` -- `for (rec.attrs[0..count], 0..) |attr, idx|` -- only first 8 attrs are copied
@@ -1217,12 +1282,14 @@ zig build test  # after adding concurrency stress test
 **Root Cause:** The PERF-008 fix reduced MAX_STORED_ATTRS from 32 to 8 for memory savings. The original code did not have truncation detection because 32 attrs covered virtually all real-world cases. At 8, truncation becomes more likely (records with >8 attrs are not uncommon in rich structured logging), but no indicator was added.
 
 **Fix Guidance:**
+
 1. Add a `truncated: bool` field to QueuedRecord, set it when `rec.attrs.len > MAX_STORED_ATTRS`.
 2. Increment `metrics.global.incDropped(rec.attrs.len - MAX_STORED_ATTRS)` when truncation occurs.
 3. Optionally add a synthetic attribute like `_truncated_attrs=N` to the serialized output so downstream consumers can detect it.
 4. Consider adding a `warn` level log on first truncation (with rate limiting to avoid log storms).
 
 **Validation Plan:**
+
 ```bash
 # Test: create a record with 12 attributes, pass through async handler
 # Before: 4 attrs silently lost, no indicator
@@ -1248,6 +1315,7 @@ zig build test  # after adding truncation detection test
 **Perf Impact:** ~40-80ns unnecessary overhead per async log call from the second mutex acquisition. Under high contention (many threads logging simultaneously), this doubles the contention window on the queue mutex.
 
 **Evidence:**
+
 - `src/handlers/async_handler.zig:177` -- `metrics.global.setQueueSize(self.queue.len());` called after every enqueue
 - `src/internal/queue.zig:380-384` -- `pub fn len(self: *Self) usize { self.mutex.lock(); defer self.mutex.unlock(); return self.count; }`
 - `src/internal/queue.zig:287-288` -- `pub fn pushDropOldest(self: *Self, item: T) void { self.mutex.lock(); defer self.mutex.unlock();`
@@ -1258,6 +1326,7 @@ zig build test  # after adding truncation detection test
 **Fix Guidance:** Options: (a) Return the current count from `pushDropOldest()` and `pushBlocking()` since they already hold the mutex and know `self.count`. (b) Use an atomic counter that is updated inside push/pop and read locklessly for metrics. (c) Remove the per-enqueue `setQueueSize()` call and update it less frequently (e.g., every N enqueues or on a timer).
 
 **Validation Plan:**
+
 ```bash
 # Benchmark: async handler enqueue throughput, 8 threads, 100K records each
 # Before: 2 mutex acquisitions per enqueue; After: 1
@@ -1283,6 +1352,7 @@ zig build bench  # after adding async handler benchmark per PERF-036
 **Perf Impact:** Moderate. The batch drain reduces per-wake overhead (fewer mutex acquisitions, fewer condition variable signals), but per-record I/O overhead remains unchanged. For a TCP sink with 32 records in a batch, this is 32 separate TCP writes instead of one combined write.
 
 **Evidence:**
+
 - `src/handlers/async_handler.zig:105-113` -- batch loop: `while (batch < max_batch_size) ... processQueuedRecord(ctx, batch_qr);`
 - `src/handlers/async_handler.zig:125-142` -- `fn processQueuedRecord(ctx: *Context, qr: QueuedRecord) void { ... ctx.inner.handle(&rec) ... }`
 - The `Handler` interface has no `handleBatch(records: []const Record)` method
@@ -1292,6 +1362,7 @@ zig build bench  # after adding async handler benchmark per PERF-036
 **Fix Guidance:** Options: (a) Add an optional `handleBatch: ?fn(*anyopaque, []const Record) HandlerError!void` to the Handler vtable. Sinks that support batching implement it; others fall back to per-record dispatch. (b) For the TCP/HTTP sinks specifically, format multiple records into a single buffer in the async handler before dispatching. (c) Accept the current design as sufficient -- the async handler's primary purpose is to decouple the caller thread from I/O, not to optimize I/O batching.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark: async handler with TCP sink, burst of 1000 records
 # Before: 1000 individual TCP writes; After: ~32 batched writes
@@ -1319,6 +1390,7 @@ strace -e sendto,write -c zig-out/bin/bench 2>&1
 **Perf Impact:** For a multi-handler with 2 handlers (common: console + file), the latency is additive. With 3+ handlers or slow handlers (e.g., network sinks with 50ms+ latency), the sequential pattern becomes significant. Example: 3 handlers at 10ms, 50ms, 5ms each = 65ms sequential vs. 50ms parallel.
 
 **Evidence:**
+
 - `src/handlers/multi_handler.zig:36-40` -- `for (ctx.handlers) |h| { h.handle(rec) catch |err| { ... }; }` -- sequential dispatch
 - `src/handlers/multi_handler.zig:72-75` -- `for (ctx.handlers) |h| { h.flush(timeout_ms) catch |err| { ... }; }` -- sequential flush
 - `src/parallel.zig:249-252` -- `parallelDispatch()` function exists for exactly this use case
@@ -1329,6 +1401,7 @@ strace -e sendto,write -c zig-out/bin/bench 2>&1
 **Fix Guidance:** Use `parallel.parallelDispatch()` from the parallel module for both `handle()` and `flush()`. This dispatches to all child handlers concurrently via the thread pool. Error handling would collect the first error (matching current behavior). Gating this behind a config option (e.g., `parallel: bool = false`) would preserve backward compatibility.
 
 **Validation Plan:**
+
 ```bash
 # Benchmark: multi-handler with 3 child handlers, each with artificial 10ms delay
 # Before: ~30ms per record; After: ~10ms per record
@@ -1355,6 +1428,7 @@ strace -e sendto,write -c zig-out/bin/bench 2>&1
 **Perf Impact:** Cannot detect performance regressions in recently changed code. The async handler, queue, and redact modules have undergone significant changes (PERF-005, 008, 015, 023, 026 fixes) but lack regression coverage.
 
 **Evidence:**
+
 - `bench/bench_main.zig` -- contains: `benchDiscardHandler`, `benchTextHandler`, `benchJsonHandler`, `benchLoggerDisabled`, `benchLoggerEnabled`, `benchTimestampFormatting`, `benchAttrCreation`
 - No `benchAsyncHandler`, no `benchQueuedRecord`, no `benchQueueContention`, no `benchIsSensitiveKey`
 - No `@import("async_handler")` or `@import("queue")` or `@import("redact")` in bench_main.zig
@@ -1362,12 +1436,14 @@ strace -e sendto,write -c zig-out/bin/bench 2>&1
 **Root Cause:** The benchmark suite was created before the async handler and redact optimizations. It was not updated to cover new code paths as they were added.
 
 **Fix Guidance:** Add benchmarks for:
+
 1. `benchAsyncHandler` -- enqueue + drain throughput through async handler
 2. `benchQueuedRecord` -- `fromRecord()` serialization + `attrs()` deserialization
 3. `benchQueueContention` -- N threads pushing/popping concurrently
 4. `benchIsSensitiveKey` -- 100K calls with varying key lengths and patterns
 
 **Validation Plan:**
+
 ```bash
 # After adding benchmarks, run and verify they produce stable results:
 zig build bench -Doptimize=ReleaseFast 2>&1 | grep -E "Async|Queue|Sensitive"
@@ -1392,6 +1468,7 @@ zig build bench -Doptimize=ReleaseFast 2>&1 | grep -E "Async|Queue|Sensitive"
 **Perf Impact:** Performance regressions can land on main undetected. A developer must manually download artifacts from two pipelines and compare numbers to notice a regression.
 
 **Evidence:**
+
 - `.gitlab-ci.yml:164` -- `bench-regression:` job defined
 - `.gitlab-ci.yml:170` -- `zig build bench -Doptimize=ReleaseFast 2>&1 | tee bench-results.txt` -- runs bench, captures output
 - `.gitlab-ci.yml:172-173` -- artifacts stored but no comparison script
@@ -1401,12 +1478,14 @@ zig build bench -Doptimize=ReleaseFast 2>&1 | grep -E "Async|Queue|Sensitive"
 **Root Cause:** The regression detection job was set up as a first step (capture results) but the second step (compare against baseline) was never implemented.
 
 **Fix Guidance:**
+
 1. Store a baseline `bench-results.txt` in the repository or as a protected artifact.
 2. Add a comparison script that parses ns/op from current and baseline results.
 3. Fail the job if any benchmark regresses by more than a configurable threshold (e.g., 15%).
 4. Alternatively, use a third-party service like `bencher.dev` or `github-action-benchmark` (GitLab equivalent).
 
 **Validation Plan:**
+
 ```bash
 # After implementing, introduce a deliberate regression (e.g., add Thread.sleep to TextHandler)
 # Verify the CI job detects and fails on the regression
@@ -1431,6 +1510,7 @@ zig build bench -Doptimize=ReleaseFast 2>&1 | grep -E "Async|Queue|Sensitive"
 **Perf Impact:** ~20-50ns per call under contention. The function is called from `parallelFormatRecords` (line 158), `parallelDispatch` (line 252), `parallelSinkWrite` (line 346), and `parallelBatchFlush` (line 439) -- so every parallel operation pays this cost. Only matters if parallel.zig is actually used by consumers (it is not used internally).
 
 **Evidence:**
+
 - `src/parallel.zig:74-78` -- `pub fn getPool() ... { pool_mutex.lock(); defer pool_mutex.unlock(); if (global_pool == null) { global_pool = ...; } return &global_pool.?; }`
 - `src/parallel.zig:71` -- `var global_pool: ... ?spice.ThreadPool ... = null;` -- not atomic
 - `src/parallel.zig:72` -- `var pool_mutex: std.Thread.Mutex = .{};`
@@ -1439,6 +1519,7 @@ zig build bench -Doptimize=ReleaseFast 2>&1 | grep -E "Async|Queue|Sensitive"
 **Root Cause:** Simple mutex-based lazy initialization without the double-checked locking optimization. This is the same issue as PERF-021 but is filed as a separate actionable item with specific fix guidance.
 
 **Fix Guidance:** Use double-checked locking pattern:
+
 1. Change `global_pool` to use `std.atomic.Value(?*spice.ThreadPool)`.
 2. First check: `if (global_pool.load(.acquire)) |pool| return pool;`
 3. Only if null: `pool_mutex.lock(); defer pool_mutex.unlock();`
@@ -1446,6 +1527,7 @@ zig build bench -Doptimize=ReleaseFast 2>&1 | grep -E "Async|Queue|Sensitive"
 5. Initialize and store: `const pool = ...; global_pool.store(pool, .release); return pool;`
 
 **Validation Plan:**
+
 ```bash
 # Benchmark getPool() call overhead: 8 threads, 1M calls each
 # Before: ~20-50ns under contention (mutex); After: ~1-5ns (atomic load)

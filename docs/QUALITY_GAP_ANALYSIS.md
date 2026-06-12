@@ -71,6 +71,7 @@ All open items resolved in pass 5. Only remaining item is:
 | 23 | High | 60 | architecture | rotating_file.zig missing sanitizeOutput() on .str values | rotating_file.zig | Line 316: `.str => \|s\| try writer.writeAll(s)` -- no `sanitizeOutput()` call; all other text handlers sanitize strings | [#35](https://gitlab.com/devnw/zig/slog/-/issues/35) | Replace `writer.writeAll(s)` with `sanitize.sanitizeOutput(writer, s)` | @maintainers | S | **Closed** (sanitizeOutput applied to .str in writeValue) |
 
 **Notes:**
+
 - Finding 15 (syslog @errorName guard) is a sub-instance of finding 11; they share a root cause and should be fixed together.
 - Findings 21-22 are deeper analyses of the same code areas as findings 9-10 (which addressed consistency but not deduplication).
 - Finding 23 is a sub-instance of finding 22 (text-mode drift), tracked separately for severity/security traceability.
@@ -90,6 +91,7 @@ All open items resolved in pass 5. Only remaining item is:
 ## Findings by Category
 
 ### api-contract
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 1 | AsyncHandler drops ALL record attributes | 100 | Closed |
@@ -101,6 +103,7 @@ All open items resolved in pass 5. Only remaining item is:
 | 36 | msg_id field present in Record but absent from all JSON/text outputs | 24 | **Closed** (pass 5) |
 
 ### architecture
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 2 | stderrHandler / stderrJsonHandler dangling pointers | 80 | Closed |
@@ -114,17 +117,20 @@ All open items resolved in pass 5. Only remaining item is:
 | 30 | json_value.zig bytes truncation at 256 bytes | 30 | Closed |
 
 ### ci-cd
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 5 | CI pipeline has no build or test stage | 80 | Closed |
 
 ### perf
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 7 | QueuedRecord i64 serialization broken | 64 | Closed |
 | 26 | UDP sink serializes under mutex | 18 | Closed |
 
 ### maintainability
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 21 | writeJsonValue() duplicated 4x | 100 | Closed |
@@ -137,12 +143,14 @@ All open items resolved in pass 5. Only remaining item is:
 | 15 | Syslog writeSDValue missing @errorName guard | 36 | Closed |
 
 ### tests
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 14 | FixedClock mechanism non-functional | 36 | Closed |
 | 29 | No unit tests for json_value.zig and text_value.zig | 36 | Closed |
 
 ### docs
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 32 | Module docstring example shows incorrect API signatures | 32 | **Closed** (pass 5) |
@@ -150,6 +158,7 @@ All open items resolved in pass 5. Only remaining item is:
 | 40 | isSensitiveKey auto-redaction behavior undocumented | 24 | **Closed** (pass 5) |
 
 ### cleanup
+
 | Rank | Finding | PriorityScore | Status |
 |------|---------|---------------|--------|
 | 25 | incReconnections() zero callers (regression) | 30 | Closed |

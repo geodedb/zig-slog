@@ -64,6 +64,7 @@ pub const Logger = struct {
 ```
 
 Key features:
+
 - **Level filtering**: Log calls below the threshold return immediately
 - **Named loggers**: Create hierarchical logger names via `named()`
 - **Context attributes**: Add attributes to all logs via `with()`
@@ -92,6 +93,7 @@ pub const HandlerVTable = struct {
 ```
 
 This design allows:
+
 - Zero-allocation handler composition
 - Handler wrapping (e.g., async wrapper around any handler)
 - Clean separation of concerns
@@ -215,6 +217,7 @@ The async handler decouples logging from I/O:
 ```
 
 Features:
+
 - Lock-free queue with configurable size
 - Drop-oldest policy prevents blocking
 - Optional blocking mode with timeout
@@ -285,6 +288,7 @@ Catalog {
 ```
 
 Loaded from JSON:
+
 ```json
 {
   "es": { "app.started": "aplicacion iniciada" },
@@ -315,6 +319,7 @@ Loaded from JSON:
 | Metrics update | None | Atomic increment |
 
 Design goals:
+
 - Zero allocations for common paths
 - Minimal overhead for disabled levels
 - Lock-free metrics
@@ -323,10 +328,12 @@ Design goals:
 ## Dependencies
 
 Internal Zig libraries:
+
 - `std` - Standard library (io, mem, Thread)
 - `json` - JSON encoding for handlers
 
 External dependencies:
+
 - `libsystemd` (optional) - For journald handler
 - Windows API (optional) - For Event Log handler
 
