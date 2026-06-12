@@ -7,16 +7,14 @@
 //! writing human-readable log output to stderr.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
     // Create a text handler writing to stderr
-    var ctx = slog.text.Context.init(
-        std.io.getStdErr().writer().any(),
-        .info,
-        slog.Clock.system(),
-    );
-    const handler = slog.text.init(&ctx);
+    var ctx: slog.text.Context = undefined;
+    const handler = slog.stderrHandler(&ctx, .info);
+    // The stderr writer is buffered; flush so short runs emit everything.
+    defer ctx.writer.flush() catch {};
 
     // Create a logger with a name
     const logger = slog.Logger.init(handler, .info, slog.Clock.system())

@@ -11,7 +11,7 @@
 //! Or use a log aggregation system like Logstash, Fluentd, or Vector.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;

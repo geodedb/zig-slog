@@ -7,7 +7,7 @@
 //! Useful for monitoring logging throughput, errors, and queue status.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -15,13 +15,11 @@ pub fn main() !void {
     // Reset metrics for clean demo
     slog.metrics.reset();
 
-    // Create multiple handlers to generate varied metrics
-    var text_ctx = slog.text.Context.init(
-        std.io.getStdErr().writer().any(),
-        .info,
-        slog.Clock.system(),
-    );
-    const text_handler = slog.text.init(&text_ctx);
+    // Create a text handler writing to stderr
+    var text_ctx: slog.text.Context = undefined;
+    const text_handler = slog.stderrHandler(&text_ctx, .info);
+    // The stderr writer is buffered; flush so short runs emit everything.
+    defer text_ctx.writer.flush() catch {};
 
     // Async handler to demonstrate queue metrics
     var async_ctx = try slog.async_handler.Context.init(allocator, .{

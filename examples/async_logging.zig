@@ -8,18 +8,16 @@
 //! delivery to the underlying handler.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    // Create the underlying text handler
-    var text_ctx = slog.text.Context.init(
-        std.io.getStdErr().writer().any(),
-        .info,
-        slog.Clock.system(),
-    );
-    const text_handler = slog.text.init(&text_ctx);
+    // Create the underlying text handler writing to stderr
+    var text_ctx: slog.text.Context = undefined;
+    const text_handler = slog.stderrHandler(&text_ctx, .info);
+    // The stderr writer is buffered; flush so short runs emit everything.
+    defer text_ctx.writer.flush() catch {};
 
     // Wrap it with async handler for non-blocking logging
     var async_ctx = try slog.async_handler.Context.init(allocator, .{

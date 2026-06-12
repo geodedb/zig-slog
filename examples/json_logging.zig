@@ -7,12 +7,18 @@
 //! systems like Elasticsearch, Splunk, or Loki.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
     // Create a JSON handler writing to stdout (for piping to log systems)
+    var out_buf: [4096]u8 = undefined;
+    var out_writer = std.Io.File.stdout().writer(
+        std.Io.Threaded.global_single_threaded.io(),
+        &out_buf,
+    );
+    defer out_writer.interface.flush() catch {};
     var ctx = slog.json.Context.init(
-        std.io.getStdOut().writer().any(),
+        &out_writer.interface,
         .debug, // Lower threshold to see all messages
         slog.Clock.system(),
     );

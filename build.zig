@@ -451,4 +451,26 @@ pub fn build(b: *std.Build) void {
         .install_subdir = "docs",
     });
     docs_step.dependOn(&install_docs.step);
+
+    // Examples: compile-checked so API drift is caught in CI (Q-48).
+    const examples_step = b.step("examples", "Build all examples");
+    const example_names = [_][]const u8{
+        "basic_text",       "json_logging",   "file_rotation", "async_logging",
+        "secret_redaction", "metrics_export", "i18n_logging",  "tcp_sink",
+    };
+    inline for (example_names) |name| {
+        const example_exe = b.addExecutable(.{
+            .name = name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/" ++ name ++ ".zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "slogz", .module = slogz_mod },
+                },
+            }),
+        });
+        examples_step.dependOn(&example_exe.step);
+    }
+    check_step.dependOn(examples_step);
 }

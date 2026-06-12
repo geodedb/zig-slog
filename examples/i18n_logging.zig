@@ -8,7 +8,7 @@
 //! appear in the log output.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -45,13 +45,11 @@ pub fn main() !void {
     var catalog = try slog.i18n.Catalog.fromJson(allocator, translations_json);
     defer catalog.deinit();
 
-    // Create base handler
-    var text_ctx = slog.text.Context.init(
-        std.io.getStdErr().writer().any(),
-        .info,
-        slog.Clock.system(),
-    );
-    const handler = slog.text.init(&text_ctx);
+    // Create base handler writing to stderr
+    var text_ctx: slog.text.Context = undefined;
+    const handler = slog.stderrHandler(&text_ctx, .info);
+    // The stderr writer is buffered; flush so short runs emit everything.
+    defer text_ctx.writer.flush() catch {};
     const base_logger = slog.Logger.init(handler, .info, slog.Clock.system())
         .named("i18n-example");
 

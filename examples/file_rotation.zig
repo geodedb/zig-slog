@@ -8,7 +8,7 @@
 //! disk space.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;

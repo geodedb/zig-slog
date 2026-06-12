@@ -8,19 +8,23 @@
 //! and other sensitive data from appearing in logs.
 
 const std = @import("std");
-const slog = @import("slog");
+const slog = @import("slogz");
 
 pub fn main() !void {
-    // Create handlers for both text and JSON output
-    var text_ctx = slog.text.Context.init(
-        std.io.getStdErr().writer().any(),
-        .info,
-        slog.Clock.system(),
-    );
-    const text_handler = slog.text.init(&text_ctx);
+    // Create handlers for both text (stderr) and JSON (stdout) output
+    var text_ctx: slog.text.Context = undefined;
+    const text_handler = slog.stderrHandler(&text_ctx, .info);
+    // The stderr writer is buffered; flush so short runs emit everything.
+    defer text_ctx.writer.flush() catch {};
 
+    var out_buf: [4096]u8 = undefined;
+    var out_writer = std.Io.File.stdout().writer(
+        std.Io.Threaded.global_single_threaded.io(),
+        &out_buf,
+    );
+    defer out_writer.interface.flush() catch {};
     var json_ctx = slog.json.Context.init(
-        std.io.getStdOut().writer().any(),
+        &out_writer.interface,
         .info,
         slog.Clock.system(),
     );
