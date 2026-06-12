@@ -4,7 +4,10 @@
 
 default:
   tags:
+    # company alone also matches the Hosted Windows Runners, which parse
+    # these bash scripts with PowerShell and fail; require linux too.
     - company
+    - linux
 
 include:
   # Security scanning
