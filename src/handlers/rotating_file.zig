@@ -31,6 +31,10 @@ pub const RotationOptions = struct {
     max_bytes: usize = 10 * 1024 * 1024, // 10MB default
     max_backups: u8 = 5,
     max_age_days: u16 = 30,
+    /// Allow absolute log paths. Off by default (SEC-0037): absolute
+    /// paths bypass the resolve-beneath sandbox and are only safe when
+    /// the operator fully controls the configured path.
+    allow_absolute_path: bool = false,
 };
 
 /// Rotating file handler context.
@@ -49,7 +53,7 @@ pub const Context = struct {
 
     pub fn init(allocator: std.mem.Allocator, options: RotationOptions, level: Level, clock: Clock) !Context {
         // Validate path before proceeding
-        try validatePath(options.path);
+        try validatePath(options);
 
         var ctx = Context{
             .allocator = allocator,
@@ -84,16 +88,19 @@ pub const Context = struct {
         }
     }
 
-    /// Validates that a path does not contain traversal sequences or is absolute
-    /// when relative paths are expected.
-    fn validatePath(path: []const u8) !void {
-        // Reject empty paths
+    /// Validates the configured log path (SEC-0037):
+    /// - non-empty
+    /// - no ".." traversal segments
+    /// - absolute paths require explicit allow_absolute_path opt-in
+    fn validatePath(options: RotationOptions) !void {
+        const path = options.path;
         if (path.len == 0) {
             return error.WriteFailed;
         }
-
-        // Reject paths containing parent directory references
         if (std.mem.indexOf(u8, path, "..") != null) {
+            return error.WriteFailed;
+        }
+        if (std.fs.path.isAbsolute(path) and !options.allow_absolute_path) {
             return error.WriteFailed;
         }
     }
@@ -115,6 +122,11 @@ pub const Context = struct {
             // default_file (0o666 & ~umask) is world-readable. Note:
             // createFile does not change the mode of an existing file.
             .permissions = .fromMode(0o600),
+            // SEC-0037: keep relative paths (and any symlinks in them)
+            // beneath the cwd sandbox. Maps to RESOLVE_BENEATH on
+            // Linux 5.6+; silently unsupported elsewhere. Absolute
+            // paths are operator-opt-in and exempt by definition.
+            .resolve_beneath = !std.fs.path.isAbsolute(path),
         }) catch |err| {
             return switch (err) {
                 error.AccessDenied => error.WriteFailed,
@@ -832,6 +844,51 @@ test "log file is created owner-only (0o600)" {
         @as(std.posix.mode_t, 0),
         st.permissions.toMode() & 0o077,
     );
+}
+
+test "absolute log path is rejected by default" {
+    const result = Context.init(
+        std.testing.allocator,
+        .{ .path = "/tmp/sec0037-absolute.log" },
+        .info,
+        Clock.system(),
+    );
+    try std.testing.expectError(error.WriteFailed, result);
+}
+
+test "absolute log path allowed with explicit opt-in" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = "/tmp/sec0037-optin.log";
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var ctx = try Context.init(
+        std.testing.allocator,
+        .{ .path = path, .allow_absolute_path = true },
+        .info,
+        Clock.system(),
+    );
+    ctx.deinit();
+}
+
+test "symlink escaping the sandbox is rejected" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const link_path = ".zig-cache/tmp/sec0037-escape-link.log";
+    std.Io.Dir.cwd().createDirPath(io, ".zig-cache/tmp") catch {};
+    std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
+    // Symlink inside the sandbox pointing outside it.
+    try std.Io.Dir.cwd().symLink(io, "/etc/hostname", link_path, .{});
+
+    const result = Context.init(
+        std.testing.allocator,
+        .{ .path = link_path },
+        .info,
+        Clock.system(),
+    );
+    try std.testing.expectError(error.WriteFailed, result);
 }
 
 test "RotatingFileHandler close via vtable" {

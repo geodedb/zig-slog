@@ -22,6 +22,9 @@ pub fn main() !void {
         .max_bytes = 1 * 1024 * 1024, // 1MB
         .max_backups = 5,
         .max_age_days = 7,
+        // Absolute paths bypass the cwd resolve-beneath sandbox
+        // (SEC-0037) and require an explicit opt-in.
+        .allow_absolute_path = true,
     }, .info, slog.Clock.system());
     defer ctx.deinit();
 
