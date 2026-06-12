@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
-//! Multi-handler - fans out log records to multiple handlers simultaneously.
+//! Multi-handler - fans out log records to multiple handlers sequentially.
 //!
 //! Delivers each log record to all child handlers. If any handler returns
 //! an error, delivery continues to the remaining handlers and the first
