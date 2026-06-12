@@ -96,6 +96,7 @@ Pass 4 addressed 7 gap items (6 closures + 1 won't-do):
 | **Total** | **6** | **1** | **0** |
 
 Key changes in pass 4:
+
 - **SEC-0025**: Network sinks now sanitize JSON attribute keys via sanitize.sanitizeKey().
 - **NEW-01 (Q-29)**: 23 inline unit tests added to json_value.zig (12) and text_value.zig (11), covering all Value variants.
 - **NEW-03 (Q-30)**: json_value.zig bytes buffer increased from 512 to 2048 bytes (1024 input bytes); truncation marker added.

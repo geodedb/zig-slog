@@ -4,7 +4,7 @@ This document describes the architecture of the slog structured logging library.
 
 ## Module Structure
 
-```
+```text
 src/
 ├── slogz.zig           # Main entry point and public API
 ├── logger.zig          # Logger type with log methods
@@ -64,6 +64,7 @@ pub const Logger = struct {
 ```
 
 Key features:
+
 - **Level filtering**: Log calls below the threshold return immediately
 - **Named loggers**: Create hierarchical logger names via `named()`
 - **Context attributes**: Add attributes to all logs via `with()`
@@ -92,6 +93,7 @@ pub const HandlerVTable = struct {
 ```
 
 This design allows:
+
 - Zero-allocation handler composition
 - Handler wrapping (e.g., async wrapper around any handler)
 - Clean separation of concerns
@@ -150,7 +152,7 @@ The `Secret` type enables automatic redaction of sensitive values.
 
 ## Data Flow
 
-```
+```text
 ┌─────────────────┐
 │  Application    │
 │  logger.info()  │
@@ -191,7 +193,7 @@ The `Secret` type enables automatic redaction of sensitive values.
 
 Text, JSON, and Syslog handlers write directly to their underlying writer:
 
-```
+```text
 Logger.info() → Handler.handle() → Writer.writeAll()
                                         │
                                         ▼
@@ -202,7 +204,7 @@ Logger.info() → Handler.handle() → Writer.writeAll()
 
 The async handler decouples logging from I/O:
 
-```
+```text
 ┌──────────┐    ┌──────────────┐    ┌──────────────┐
 │  Logger  │───▶│ BoundedQueue │───▶│ Worker Thread│
 │ (caller) │    │  (1024 slots)│    │  (background)│
@@ -215,6 +217,7 @@ The async handler decouples logging from I/O:
 ```
 
 Features:
+
 - Lock-free queue with configurable size
 - Drop-oldest policy prevents blocking
 - Optional blocking mode with timeout
@@ -224,7 +227,7 @@ Features:
 
 Network sinks add reliability features:
 
-```
+```text
 ┌──────────┐    ┌──────────────┐    ┌──────────────┐
 │  Logger  │───▶│   TCP Sink   │───▶│ Log Collector│
 └──────────┘    │  - Reconnect │    │ (Logstash,   │
@@ -237,7 +240,7 @@ Network sinks add reliability features:
 
 Handlers can be composed for complex setups:
 
-```
+```text
 ┌──────────┐
 │  Logger  │
 └────┬─────┘
@@ -276,7 +279,7 @@ Metrics are lock-free using atomic operations. Export via `renderPrometheus()`.
 
 Translation uses a two-level map:
 
-```
+```text
 locale → message_id → translated_string
 
 Catalog {
@@ -285,6 +288,7 @@ Catalog {
 ```
 
 Loaded from JSON:
+
 ```json
 {
   "es": { "app.started": "aplicacion iniciada" },
@@ -315,6 +319,7 @@ Loaded from JSON:
 | Metrics update | None | Atomic increment |
 
 Design goals:
+
 - Zero allocations for common paths
 - Minimal overhead for disabled levels
 - Lock-free metrics
@@ -323,10 +328,12 @@ Design goals:
 ## Dependencies
 
 Internal Zig libraries:
+
 - `std` - Standard library (io, mem, Thread)
 - `json` - JSON encoding for handlers
 
 External dependencies:
+
 - `libsystemd` (optional) - For journald handler
 - Windows API (optional) - For Event Log handler
 

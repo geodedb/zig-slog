@@ -119,7 +119,7 @@ repos:
     files: \.zig$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
     pass_filenames: false
-    args: [src/, build.zig, tests/, benchmarks/, examples/]
+    args: [src/, build.zig, tests/, bench/, examples/]
     stages: [pre-commit, pre-push]
 
       # Zig build check (compilation) — moved to pre-push per #471 to reduce commit friction
