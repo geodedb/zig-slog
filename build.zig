@@ -393,6 +393,17 @@ pub fn build(b: *std.Build) void {
     const compare_bench_step = b.step("compare-bench", "Compare benchmark results for regressions");
     compare_bench_step.dependOn(&run_compare_bench.step);
 
+    // Compare-bench self-tests (PERF-043: gate must not silently re-break)
+    const compare_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/compare.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_compare_tests = b.addRunArtifact(compare_tests);
+    test_step.dependOn(&run_compare_tests.step);
+
     // Format step
     const fmt_step = b.step("fmt", "Format source code");
     const fmt = b.addFmt(.{

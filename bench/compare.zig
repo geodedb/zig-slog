@@ -52,7 +52,7 @@ fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     defer file.close(io);
     var read_buf: [8192]u8 = undefined;
     var reader = file.reader(io, &read_buf);
-    return try reader.interface.readAlloc(allocator, 10 * 1024 * 1024);
+    return try reader.interface.allocRemaining(allocator, .limited(10 * 1024 * 1024));
 }
 
 const MAX_TIERS = 16;
@@ -151,6 +151,79 @@ fn extractIntValue(obj: []const u8, key: []const u8) ?i64 {
     return std.fmt.parseInt(i64, obj[val_start..val_end], 10) catch null;
 }
 
+/// Compares baseline tiers against current tiers and returns the number of
+/// per-metric regressions beyond `threshold` percent. When `out` is non-null,
+/// a per-metric report is written to it. (PERF-043: extracted from main so the
+/// regression gate itself is unit-testable.)
+fn compareTiers(
+    baseline: []const TierValues,
+    current: []const TierValues,
+    threshold: f64,
+    out: ?*std.Io.Writer,
+) !usize {
+    var regressions: usize = 0;
+
+    for (baseline) |base_tier| {
+        // Find matching tier in current
+        const curr_tier = blk: {
+            for (current) |ct| {
+                if (std.mem.eql(u8, ct.name, base_tier.name)) break :blk ct;
+            }
+            if (out) |w| try w.print("  Tier {s}: MISSING in current results\n\n", .{base_tier.name});
+            continue;
+        };
+
+        if (out) |w| {
+            try w.print("  Tier: {s}\n", .{base_tier.name});
+            try w.print("  {s:<25} {s:>12} {s:>12} {s:>8} {s:>6}\n", .{
+                "Metric", "Baseline", "Current", "Delta%", "Status",
+            });
+            try w.print("  {s:<25} {s:>12} {s:>12} {s:>8} {s:>6}\n", .{
+                "-------------------------", "------------", "------------", "--------", "------",
+            });
+        }
+
+        for (&metrics, 0..) |m, i| {
+            const base_val = base_tier.values[i] orelse continue;
+            const curr_val = curr_tier.values[i] orelse continue;
+
+            if (base_val == 0) continue;
+
+            const delta_pct: f64 = @as(f64, @floatFromInt(curr_val - base_val)) / @as(f64, @floatFromInt(base_val)) * 100.0;
+
+            const is_regression = if (m.higher_is_better)
+                delta_pct < -threshold
+            else
+                delta_pct > threshold;
+
+            if (is_regression) regressions += 1;
+
+            if (out) |w| {
+                const status: []const u8 = if (is_regression) "FAIL" else "ok";
+
+                // Format delta with sign manually
+                var delta_buf: [16]u8 = undefined;
+                const delta_str = std.fmt.bufPrint(&delta_buf, "{d:.1}%", .{delta_pct}) catch "?";
+
+                const base_u: u64 = @intCast(@max(base_val, 0));
+                const curr_u: u64 = @intCast(@max(curr_val, 0));
+
+                try w.print("  {s:<25} {d:>12} {d:>12} {s:>8} {s:>6}\n", .{
+                    m.name,
+                    base_u,
+                    curr_u,
+                    delta_str,
+                    status,
+                });
+            }
+        }
+
+        if (out) |w| try w.print("\n", .{});
+    }
+
+    return regressions;
+}
+
 pub fn main(init: std.process.Init.Minimal) !void {
     const io = getIo();
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -219,65 +292,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
     try stdout.print("================================================================================\n", .{});
     try stdout.print("\n", .{});
 
-    var any_regression = false;
-
-    for (baseline_tiers.slice()) |base_tier| {
-        // Find matching tier in current
-        const curr_tier = blk: {
-            for (current_tiers.slice()) |ct| {
-                if (std.mem.eql(u8, ct.name, base_tier.name)) break :blk ct;
-            }
-            try stdout.print("  Tier {s}: MISSING in current results\n\n", .{base_tier.name});
-            continue;
-        };
-
-        try stdout.print("  Tier: {s}\n", .{base_tier.name});
-        try stdout.print("  {s:<25} {s:>12} {s:>12} {s:>8} {s:>6}\n", .{
-            "Metric", "Baseline", "Current", "Delta%", "Status",
-        });
-        try stdout.print("  {s:<25} {s:>12} {s:>12} {s:>8} {s:>6}\n", .{
-            "-------------------------", "------------", "------------", "--------", "------",
-        });
-
-        for (&metrics, 0..) |m, i| {
-            const base_val = base_tier.values[i] orelse continue;
-            const curr_val = curr_tier.values[i] orelse continue;
-
-            if (base_val == 0) continue;
-
-            const delta_pct: f64 = @as(f64, @floatFromInt(curr_val - base_val)) / @as(f64, @floatFromInt(base_val)) * 100.0;
-
-            const is_regression = if (m.higher_is_better)
-                delta_pct < -threshold
-            else
-                delta_pct > threshold;
-
-            const status: []const u8 = if (is_regression) "FAIL" else "ok";
-
-            if (is_regression) any_regression = true;
-
-            // Format delta with sign manually
-            var delta_buf: [16]u8 = undefined;
-            const delta_str = std.fmt.bufPrint(&delta_buf, "{d:.1}%", .{delta_pct}) catch "?";
-
-            const base_u: u64 = @intCast(@max(base_val, 0));
-            const curr_u: u64 = @intCast(@max(curr_val, 0));
-
-            try stdout.print("  {s:<25} {d:>12} {d:>12} {s:>8} {s:>6}\n", .{
-                m.name,
-                base_u,
-                curr_u,
-                delta_str,
-                status,
-            });
-        }
-
-        try stdout.print("\n", .{});
-    }
+    const regressions = try compareTiers(baseline_tiers.slice(), current_tiers.slice(), threshold, stdout);
 
     try stdout.print("================================================================================\n", .{});
 
-    if (any_regression) {
+    if (regressions > 0) {
         try stdout.print("  RESULT: REGRESSION DETECTED (threshold: {d:.0}%)\n", .{threshold});
         try stdout.print("================================================================================\n", .{});
         try stdout.flush();
@@ -287,4 +306,45 @@ pub fn main(init: std.process.Init.Minimal) !void {
         try stdout.print("================================================================================\n", .{});
         try stdout.flush();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Self-tests (PERF-043): the regression gate must not silently re-break.
+// Fixture shape mirrors benchmarks/results/baseline.json: a "tiers" array of
+// objects with "name" and metric keys from the `metrics` table above.
+// ---------------------------------------------------------------------------
+
+const fixture_base =
+    \\{"tiers":[{"name":"100K","text_ns_op":100,"json_ns_op":100}]}
+;
+const fixture_regressed =
+    \\{"tiers":[{"name":"100K","text_ns_op":200,"json_ns_op":100}]}
+;
+
+test "extractTiers parses tier name and metric values" {
+    const tiers = extractTiers(fixture_base);
+    try std.testing.expectEqual(@as(usize, 1), tiers.len);
+    try std.testing.expectEqualStrings("100K", tiers.items[0].name);
+
+    var saw_text_ns_op = false;
+    for (&metrics, 0..) |m, i| {
+        if (std.mem.eql(u8, m.json_key, "text_ns_op")) {
+            try std.testing.expectEqual(@as(?i64, 100), tiers.items[0].values[i]);
+            saw_text_ns_op = true;
+        }
+    }
+    try std.testing.expect(saw_text_ns_op);
+}
+
+test "compare detects regression beyond threshold" {
+    const base = extractTiers(fixture_base);
+    const curr = extractTiers(fixture_regressed);
+    // text_ns_op: 100 -> 200 is a 100% regression against a 20% threshold.
+    try std.testing.expect(try compareTiers(base.slice(), curr.slice(), 20.0, null) > 0);
+}
+
+test "compare passes identical results" {
+    const base = extractTiers(fixture_base);
+    const curr = extractTiers(fixture_base);
+    try std.testing.expectEqual(@as(usize, 0), try compareTiers(base.slice(), curr.slice(), 20.0, null));
 }
