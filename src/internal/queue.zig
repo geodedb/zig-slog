@@ -353,21 +353,6 @@ pub fn BoundedQueue(comptime T: type) type {
             self.not_empty.signal(io());
         }
 
-        /// Pop item, blocking until available.
-        pub fn pop(self: *Self) T {
-            self.mutex.lockUncancelable(io());
-            defer self.mutex.unlock(io());
-
-            while (self.count == 0) {
-                self.not_empty.waitUncancelable(io(), &self.mutex);
-            }
-
-            const item = self.buffer[self.head];
-            self.head = (self.head + 1) % self.buffer.len;
-            self.count -= 1;
-            return item;
-        }
-
         /// Try to pop item without blocking.
         pub fn tryPop(self: *Self) ?T {
             self.mutex.lockUncancelable(io());
@@ -431,7 +416,8 @@ pub fn BoundedQueue(comptime T: type) type {
         }
 
         /// Wake all popWait waiters and make popWait return null once the
-        /// queue is drained. Idempotent.
+        /// queue is drained. Idempotent. Shutdown is permanent: the queue
+        /// cannot be reopened, so a fresh queue is required after shutdown.
         pub fn shutdownWake(self: *Self) void {
             self.mutex.lockUncancelable(io());
             defer self.mutex.unlock(io());
