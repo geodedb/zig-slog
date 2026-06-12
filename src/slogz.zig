@@ -422,3 +422,11 @@ test "parallel re-export is reachable" {
         try std.testing.expectEqual(@as(usize, 3), r.len);
     }
 }
+
+test {
+    // Zig only collects tests from files referenced in a test context.
+    // Reference the internal queue and async handler so their in-file
+    // tests actually run as part of the unit test suite (PERF-040).
+    _ = queue;
+    _ = async_handler;
+}

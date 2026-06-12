@@ -267,6 +267,8 @@ pub fn BoundedQueue(comptime T: type) type {
         tail: usize,
         count: usize,
         dropped: usize,
+        /// Set by shutdownWake; popWait returns null once the queue drains.
+        shutdown: bool,
         mutex: std.Io.Mutex,
         not_empty: std.Io.Condition,
         not_full: std.Io.Condition,
@@ -281,6 +283,7 @@ pub fn BoundedQueue(comptime T: type) type {
                 .tail = 0,
                 .count = 0,
                 .dropped = 0,
+                .shutdown = false,
                 .mutex = std.Io.Mutex.init,
                 .not_empty = std.Io.Condition.init,
                 .not_full = std.Io.Condition.init,
@@ -403,6 +406,33 @@ pub fn BoundedQueue(comptime T: type) type {
             return item;
         }
 
+        /// Pop an item, blocking on the not_empty condition until an item
+        /// is available or `shutdownWake` has been called. After shutdown,
+        /// remaining items are still returned; null means shut down AND empty.
+        pub fn popWait(self: *Self) ?T {
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
+
+            while (self.count == 0) {
+                if (self.shutdown) return null;
+                self.not_empty.waitUncancelable(io(), &self.mutex);
+            }
+
+            const item = self.buffer[self.head];
+            self.head = (self.head + 1) % self.buffer.len;
+            self.count -= 1;
+            return item;
+        }
+
+        /// Wake all popWait waiters and make popWait return null once the
+        /// queue is drained. Idempotent.
+        pub fn shutdownWake(self: *Self) void {
+            self.mutex.lockUncancelable(io());
+            defer self.mutex.unlock(io());
+            self.shutdown = true;
+            self.not_empty.broadcast(io());
+        }
+
         pub fn len(self: *Self) usize {
             self.mutex.lockUncancelable(io());
             defer self.mutex.unlock(io());
@@ -452,8 +482,8 @@ test "BoundedQueue basic operations" {
     var queue = try BoundedQueue(u32).init(std.testing.allocator, 4);
     defer queue.deinit(std.testing.allocator);
 
-    queue.pushDropOldest(1);
-    queue.pushDropOldest(2);
+    _ = queue.pushDropOldest(1);
+    _ = queue.pushDropOldest(2);
     try std.testing.expectEqual(@as(usize, 2), queue.len());
 
     const v = queue.tryPop();
@@ -464,13 +494,36 @@ test "BoundedQueue drop oldest" {
     var queue = try BoundedQueue(u32).init(std.testing.allocator, 2);
     defer queue.deinit(std.testing.allocator);
 
-    queue.pushDropOldest(1);
-    queue.pushDropOldest(2);
-    queue.pushDropOldest(3); // Should drop 1
+    _ = queue.pushDropOldest(1);
+    _ = queue.pushDropOldest(2);
+    _ = queue.pushDropOldest(3); // Should drop 1
 
     try std.testing.expectEqual(@as(usize, 1), queue.droppedCount());
     try std.testing.expectEqual(@as(u32, 2), queue.tryPop().?);
     try std.testing.expectEqual(@as(u32, 3), queue.tryPop().?);
+}
+
+test "BoundedQueue popWait returns items and null after shutdownWake" {
+    var queue = try BoundedQueue(u32).init(std.testing.allocator, 4);
+    defer queue.deinit(std.testing.allocator);
+
+    _ = queue.pushDropOldest(42);
+    try std.testing.expectEqual(@as(?u32, 42), queue.popWait());
+
+    queue.shutdownWake();
+    try std.testing.expectEqual(@as(?u32, null), queue.popWait());
+}
+
+test "BoundedQueue popWait drains remaining items after shutdown" {
+    var queue = try BoundedQueue(u32).init(std.testing.allocator, 4);
+    defer queue.deinit(std.testing.allocator);
+
+    _ = queue.pushDropOldest(1);
+    _ = queue.pushDropOldest(2);
+    queue.shutdownWake();
+    try std.testing.expectEqual(@as(?u32, 1), queue.popWait());
+    try std.testing.expectEqual(@as(?u32, 2), queue.popWait());
+    try std.testing.expectEqual(@as(?u32, null), queue.popWait());
 }
 
 test "QueuedRecord fromRecord preserves string attrs" {
@@ -710,7 +763,7 @@ test "BoundedQueue waitEmpty" {
     // Empty queue should return true immediately
     try std.testing.expect(queue.waitEmpty(0));
 
-    queue.pushDropOldest(1);
+    _ = queue.pushDropOldest(1);
 
     // Non-empty queue with zero timeout should return false
     try std.testing.expect(!queue.waitEmpty(0));

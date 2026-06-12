@@ -55,7 +55,6 @@ pub const Context = struct {
     drop_oldest: bool,
     block_timeout_ms: u32,
     level: std.atomic.Value(i32),
-    running: std.atomic.Value(bool),
     thread: ?std.Thread,
 
     /// Initialize the async handler context. Does NOT start the background
@@ -68,7 +67,6 @@ pub const Context = struct {
             .drop_oldest = options.drop_oldest,
             .block_timeout_ms = options.block_timeout_ms,
             .level = std.atomic.Value(i32).init(@intFromEnum(Level.info)),
-            .running = std.atomic.Value(bool).init(true),
             .thread = null,
         };
     }
@@ -84,11 +82,9 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
-        // Signal shutdown
-        self.running.store(false, .release);
-
-        // Wake up worker thread
-        self.queue.not_empty.signal(std.Io.Threaded.global_single_threaded.io());
+        // Signal shutdown: wake the worker's popWait. The worker drains
+        // remaining records, then exits once the queue is empty.
+        self.queue.shutdownWake();
 
         // Wait for thread
         if (self.thread) |t| {
@@ -102,23 +98,21 @@ pub const Context = struct {
     const max_batch_size: usize = 32;
 
     fn workerThread(ctx: *Context) void {
-        while (ctx.running.load(.acquire)) {
-            // Wait for a record with timeout
-            if (ctx.queue.popTimeout(100)) |qr| {
-                processQueuedRecord(ctx, qr);
+        while (true) {
+            const qr = ctx.queue.popWait() orelse break;
+            processQueuedRecord(ctx, qr);
 
-                // Batch drain: process additional queued records without
-                // re-waiting, up to max_batch_size per wake cycle.
-                var batch: usize = 1;
-                while (batch < max_batch_size) : (batch += 1) {
-                    if (ctx.queue.tryPop()) |batch_qr| {
-                        processQueuedRecord(ctx, batch_qr);
-                    } else break;
-                }
+            // Batch drain: process additional queued records without
+            // re-waiting, up to max_batch_size per wake cycle.
+            var batch: usize = 1;
+            while (batch < max_batch_size) : (batch += 1) {
+                if (ctx.queue.tryPop()) |batch_qr| {
+                    processQueuedRecord(ctx, batch_qr);
+                } else break;
             }
         }
 
-        // Drain remaining records at shutdown
+        // Drain any records that raced in around shutdown.
         while (ctx.queue.tryPop()) |qr| {
             processQueuedRecord(ctx, qr);
         }
