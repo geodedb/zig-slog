@@ -217,12 +217,12 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     ctx.level.store(@intFromEnum(level), .release);
 }
 
-/// Flush waits for the queue to drain using the queue's empty condition
-/// variable, then flushes the inner handler.
+/// Flush waits for the queue to drain (waitEmpty's timed 1ms poll loop,
+/// see PERF-042), then flushes the inner handler.
 fn flush(ctx_ptr: *anyopaque, timeout_ms: u32) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
 
-    // Wait for queue to drain using the CV-based waitEmpty.
+    // Wait for queue to drain using the timed waitEmpty.
     // If timeout_ms is 0, we still try a brief wait to allow in-flight items
     // to be processed.
     const wait_ms = if (timeout_ms == 0) 5000 else timeout_ms;

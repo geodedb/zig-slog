@@ -271,9 +271,6 @@ pub fn BoundedQueue(comptime T: type) type {
         shutdown: bool,
         mutex: std.Io.Mutex,
         not_empty: std.Io.Condition,
-        not_full: std.Io.Condition,
-        /// Condition variable signaled when the queue becomes empty.
-        empty: std.Io.Condition,
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
             const buffer = try allocator.alloc(T, capacity);
@@ -286,8 +283,6 @@ pub fn BoundedQueue(comptime T: type) type {
                 .shutdown = false,
                 .mutex = std.Io.Mutex.init,
                 .not_empty = std.Io.Condition.init,
-                .not_full = std.Io.Condition.init,
-                .empty = std.Io.Condition.init,
             };
         }
 
@@ -317,6 +312,11 @@ pub fn BoundedQueue(comptime T: type) type {
         }
 
         /// Push item, blocking if full (with timeout).
+        ///
+        /// Timed wait is implemented as a 1ms poll loop: Zig 0.16
+        /// std.Io.Condition has no timed wait primitive, and an untimed
+        /// condvar wait could block a producer forever if the consumer
+        /// dies. Accepted design -- see PERF-042.
         pub fn pushBlocking(self: *Self, item: T, timeout_ms: u32) QueueError!void {
             self.mutex.lockUncancelable(io());
             defer self.mutex.unlock(io());
@@ -357,8 +357,6 @@ pub fn BoundedQueue(comptime T: type) type {
             const item = self.buffer[self.head];
             self.head = (self.head + 1) % self.buffer.len;
             self.count -= 1;
-            self.not_full.signal(io());
-            if (self.count == 0) self.empty.broadcast(io());
             return item;
         }
 
@@ -372,12 +370,14 @@ pub fn BoundedQueue(comptime T: type) type {
             const item = self.buffer[self.head];
             self.head = (self.head + 1) % self.buffer.len;
             self.count -= 1;
-            self.not_full.signal(io());
-            if (self.count == 0) self.empty.broadcast(io());
             return item;
         }
 
         /// Pop with timeout.
+        ///
+        /// Timed wait is a 1ms poll loop (no timed condvar wait in
+        /// Zig 0.16 std.Io). Prefer popWait + shutdownWake for consumers
+        /// that can use shutdown signaling -- see PERF-040/PERF-042.
         pub fn popTimeout(self: *Self, timeout_ms: u32) ?T {
             self.mutex.lockUncancelable(io());
             defer self.mutex.unlock(io());
@@ -401,8 +401,6 @@ pub fn BoundedQueue(comptime T: type) type {
             const item = self.buffer[self.head];
             self.head = (self.head + 1) % self.buffer.len;
             self.count -= 1;
-            self.not_full.signal(io());
-            if (self.count == 0) self.empty.broadcast(io());
             return item;
         }
 
@@ -455,6 +453,9 @@ pub fn BoundedQueue(comptime T: type) type {
 
         /// Wait until the queue is empty or the timeout expires.
         /// Returns true if the queue is empty, false on timeout.
+        ///
+        /// Timed wait is a 1ms poll loop (no timed condvar wait in
+        /// Zig 0.16 std.Io). Accepted design -- see PERF-042.
         pub fn waitEmpty(self: *Self, timeout_ms: u32) bool {
             self.mutex.lockUncancelable(io());
             defer self.mutex.unlock(io());
