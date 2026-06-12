@@ -38,25 +38,17 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     const current_level: Level = @enumFromInt(ctx.level.load(.acquire));
     if (!rec.level.atLeast(current_level)) return;
 
-    if (ctx.handlers.len <= MAX_PARALLEL_HANDLERS) {
-        var results: [MAX_PARALLEL_HANDLERS]parallel.MultiHandlerResult = undefined;
-        parallel.dispatchHandlers(ctx.handlers, rec, results[0..ctx.handlers.len]);
-
-        var first_err: ?HandlerError = null;
-        for (results[0..ctx.handlers.len]) |r| {
-            if (r.err != null and first_err == null) first_err = r.err;
-        }
-        if (first_err) |err| return err;
-    } else {
-        // Fallback for > MAX_PARALLEL_HANDLERS: sequential dispatch
-        var first_err: ?HandlerError = null;
-        for (ctx.handlers) |h| {
-            h.handle(rec) catch |err| {
-                if (first_err == null) first_err = err;
-            };
-        }
-        if (first_err) |err| return err;
+    // Sequential dispatch (PERF-039): preserves the ordering guarantees
+    // PERF-035 protected and avoids thread-pool wake overhead (~12us)
+    // that dwarfs per-handler cost. Consumers who want parallel fan-out
+    // can call parallel.dispatchHandlers directly.
+    var first_err: ?HandlerError = null;
+    for (ctx.handlers) |h| {
+        h.handle(rec) catch |err| {
+            if (first_err == null) first_err = err;
+        };
     }
+    if (first_err) |err| return err;
 }
 
 fn withAttrs(ctx_ptr: *anyopaque, _: []const Attr) Handler {
