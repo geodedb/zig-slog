@@ -51,6 +51,11 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     var buf: [16384]u8 = undefined;
     var fbs: std.Io.Writer = .fixed(&buf);
 
+    // Known SEC-0039 residual: a record whose JSON rendering exceeds 16KB
+    // (possible within the 64KB record budget, especially with escaping
+    // expansion) is dropped whole rather than truncated -- truncating JSON
+    // mid-document would emit invalid JSON to downstream parsers. Tracked
+    // as a follow-up; text/rotating handlers truncate with a marker.
     writeJsonRecord(&fbs, rec, ctx.prefix) catch return error.WriteFailed;
 
     const output = fbs.buffered();
