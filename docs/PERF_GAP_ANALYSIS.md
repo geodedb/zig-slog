@@ -1499,7 +1499,7 @@ ss -s | grep estab
 **Evidence:**
 
 - `src/handlers/async_handler.zig:57` -- `level: Level,` (plain enum field, not atomic)
-- `src/handlers/async_handler.zig:58` -- `running: std.atomic.Value(bool).init(true),` (contrast: `running` uses atomic)
+- `src/handlers/async_handler.zig:58` -- `running: std.atomic.Value(bool).init(true),` (contrast: `running` used atomic; the field was later removed in pass 6 when the worker moved to popWait/shutdownWake -- evidence preserved for history)
 - `src/handlers/async_handler.zig:189` -- `if (!rec.level.atLeast(ctx.level)) return;` (read on caller thread)
 - `src/handlers/async_handler.zig:213-215` -- `fn setLevel(ctx_ptr: *anyopaque, level: Level) void { ... ctx.level = level; }` (write from any thread)
 

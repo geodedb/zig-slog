@@ -366,37 +366,6 @@ pub fn BoundedQueue(comptime T: type) type {
             return item;
         }
 
-        /// Pop with timeout.
-        ///
-        /// Timed wait is a 1ms poll loop (no timed condvar wait in
-        /// Zig 0.16 std.Io). Prefer popWait + shutdownWake for consumers
-        /// that can use shutdown signaling -- see PERF-040/PERF-042.
-        pub fn popTimeout(self: *Self, timeout_ms: u32) ?T {
-            self.mutex.lockUncancelable(io());
-            defer self.mutex.unlock(io());
-
-            if (self.count == 0) {
-                if (timeout_ms == 0) return null;
-                // Wait with timeout via polling
-                const deadline_ns: i96 = std.Io.Timestamp.now(io(), .awake).nanoseconds +
-                    @as(i96, @intCast(@as(u64, timeout_ms) * std.time.ns_per_ms));
-                while (self.count == 0) {
-                    if (std.Io.Timestamp.now(io(), .awake).nanoseconds >= deadline_ns) {
-                        return null;
-                    }
-                    // Release mutex, sleep briefly, re-acquire
-                    self.mutex.unlock(io());
-                    io().sleep(std.Io.Duration.fromMilliseconds(1), .awake) catch {};
-                    self.mutex.lockUncancelable(io());
-                }
-            }
-
-            const item = self.buffer[self.head];
-            self.head = (self.head + 1) % self.buffer.len;
-            self.count -= 1;
-            return item;
-        }
-
         /// Pop an item, blocking on the not_empty condition until an item
         /// is available or `shutdownWake` has been called. After shutdown,
         /// remaining items are still returned; null means shut down AND empty.

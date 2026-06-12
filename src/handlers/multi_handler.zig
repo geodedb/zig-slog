@@ -28,8 +28,9 @@ pub const Context = struct {
     pub fn deinit(_: *Context) void {}
 };
 
-/// Maximum number of handlers that can be dispatched in parallel
-/// without heap allocation (stack-allocated result buffer).
+/// Maximum number of handlers the flush() path can fan out through
+/// parallel.flushHandlers without heap allocation (stack-allocated
+/// result buffer). handle() dispatches sequentially (PERF-039).
 const MAX_PARALLEL_HANDLERS = 16;
 
 fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {

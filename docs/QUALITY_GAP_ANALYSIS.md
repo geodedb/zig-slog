@@ -2,7 +2,7 @@
 
 **Repository:** gitlab.com/devnw/zig/slog
 **Branch:** main
-**Last updated:** 2026-06-12 (rev 7 -- Pass 6 closure: Q-41..Q-48 all Closed; Q-46 with gitignored correction; latent-dead-test discovery noted)
+**Last updated:** 2026-06-12 (rev 8 -- iteration-2 re-scan: Q-49..Q-53 found and closed same-day)
 **Scoring framework:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -13,9 +13,9 @@
 |----------|-------|--------|----------|------|------------------|
 | Critical | 4 | 4 | 0 | 0 | 0 |
 | High | 8 | 7 | 1 | 0 | 0 |
-| Medium | 20 | 20 | 0 | 0 | 0 |
-| Low | 16 | 15 | 1 | 0 | 0 |
-| **Total** | **48** | **46** | **2** | **0** | **0** |
+| Medium | 21 | 21 | 0 | 0 | 0 |
+| Low | 20 | 19 | 1 | 0 | 0 |
+| **Total** | **53** | **51** | **2** | **0** | **0** |
 
 ### Remaining Items
 
@@ -32,6 +32,14 @@ Pass 6 added 8 new findings (Q-41..Q-48). All are now Closed:
 
 **Side discovery -- latent-dead tests revived (pass 6):**
 In-file tests in `src/internal/queue.zig`, `src/handlers/async_handler.zig`, and `src/handlers/rotating_file.zig` were never running because no `test {}` block in `slogz.zig` referenced their compilation units. 29 latent-dead tests were revived and 16 new tests added by wiring `slogz.zig` `test {}` block references, growing the suite from 261 to 306. This relates to GitLab #11 (test coverage). No new gap item created; recorded here for traceability.
+
+**Iteration-2 re-scan (2026-06-12, same day):** the post-closure verification scan found 5 small follow-on items, all fixed immediately in one commit (no GitLab issues -- found and closed within the same audit session):
+
+- **Q-49** (Medium, Closed) -- `docs/API.md` async example omitted the required `try async_ctx.start()` call (two-step init formalized in pass 6); copy-pasting it produced a silent no-op handler. Example fixed.
+- **Q-50** (Low, Closed) -- `BoundedQueue.popTimeout` became dead code after the worker moved to `popWait` (PERF-040); removed (timed-wait semantics remain available via `pushBlocking`/`waitEmpty`).
+- **Q-51** (Low, Closed) -- `MAX_PARALLEL_HANDLERS` doc comment still described parallel `handle()` dispatch; reworded to reflect it now guards only the `flush()` path.
+- **Q-52** (Low, Closed) -- `docs/API.md` MetricsSnapshot field list was missing `records_truncated_total` (added by SEC-0039); added.
+- **Q-53** (Low, Closed) -- stale PERF-031 evidence bullet in `docs/PERF_GAP_ANALYSIS.md` referenced the removed `running` atomic; annotated as historical.
 
 Pass 5 item now resolved:
 

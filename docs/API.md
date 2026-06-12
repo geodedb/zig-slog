@@ -146,6 +146,7 @@ var async_ctx = try slog.async_handler.Context.init(allocator, .{
     .block_timeout_ms = 0,      // 0 = non-blocking
 });
 defer async_ctx.deinit();
+try async_ctx.start(); // spawn the worker thread (required)
 
 const handler = slog.async_handler.init(&async_ctx);
 
@@ -243,6 +244,7 @@ const snap = slog.metrics.global.snapshot();
 // snap.queue_size
 // snap.rotations_total
 // snap.reconnections_total
+// snap.records_truncated_total
 ```
 
 ### Prometheus Export
