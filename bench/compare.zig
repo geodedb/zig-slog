@@ -169,6 +169,9 @@ fn compareTiers(
             for (current) |ct| {
                 if (std.mem.eql(u8, ct.name, base_tier.name)) break :blk ct;
             }
+            // A tier missing from current results is itself a regression:
+            // a dropped/renamed tier must fail the gate, not silently pass.
+            regressions += 1;
             if (out) |w| try w.print("  Tier {s}: MISSING in current results\n\n", .{base_tier.name});
             continue;
         };
@@ -347,4 +350,26 @@ test "compare passes identical results" {
     const base = extractTiers(fixture_base);
     const curr = extractTiers(fixture_base);
     try std.testing.expectEqual(@as(usize, 0), try compareTiers(base.slice(), curr.slice(), 20.0, null));
+}
+
+test "compare counts missing tier as regression" {
+    const base = extractTiers(fixture_base);
+    const curr = extractTiers("{\"tiers\":[]}");
+    // A tier dropped from current results must fail the gate, not pass silently.
+    try std.testing.expect(try compareTiers(base.slice(), curr.slice(), 20.0, null) > 0);
+}
+
+const fixture_ops_base =
+    \\{"tiers":[{"name":"100K","text_ops_sec":1000}]}
+;
+const fixture_ops_regressed =
+    \\{"tiers":[{"name":"100K","text_ops_sec":500}]}
+;
+
+test "compare detects ops/s regression (higher_is_better)" {
+    const base = extractTiers(fixture_ops_base);
+    const curr = extractTiers(fixture_ops_regressed);
+    // text_ops_sec is higher_is_better: 1000 -> 500 is a -50% delta against
+    // a 20% threshold, exercising the delta_pct < -threshold branch.
+    try std.testing.expect(try compareTiers(base.slice(), curr.slice(), 20.0, null) > 0);
 }
