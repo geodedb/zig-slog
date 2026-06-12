@@ -111,6 +111,10 @@ pub const Context = struct {
 
         self.file = std.Io.Dir.cwd().createFile(io, path, .{
             .truncate = false,
+            // SEC-0034: owner-only. Log files may contain PII/secrets;
+            // default_file (0o666 & ~umask) is world-readable. Note:
+            // createFile does not change the mode of an existing file.
+            .permissions = .fromMode(0o600),
         }) catch |err| {
             return switch (err) {
                 error.AccessDenied => error.WriteFailed,
@@ -343,7 +347,7 @@ test "RotatingFileHandler basic" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -425,7 +429,7 @@ test "RotatingFileHandler secret redaction" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -460,9 +464,11 @@ test "RotatingFileHandler secret redaction" {
     // Read the file contents and verify [REDACTED] is present
     // and the actual secret is NOT present
     const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var read_buf: [4096]u8 = undefined;
-    const bytes_read = try file.readAll(&read_buf);
+    var file_rbuf: [4096]u8 = undefined;
+    var file_reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &file_rbuf);
+    const bytes_read = file_reader.interface.readSliceShort(&read_buf) catch 0;
     const contents = read_buf[0..bytes_read];
 
     try std.testing.expect(std.mem.indexOf(u8, contents, "[REDACTED]") != null);
@@ -475,7 +481,7 @@ test "RotatingFileHandler all value types" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -515,9 +521,11 @@ test "RotatingFileHandler all value types" {
 
     // Read and verify the file contents
     const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var read_buf: [4096]u8 = undefined;
-    const bytes_read = try file.readAll(&read_buf);
+    var file_rbuf: [4096]u8 = undefined;
+    var file_reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &file_rbuf);
+    const bytes_read = file_reader.interface.readSliceShort(&read_buf) catch 0;
     const contents = read_buf[0..bytes_read];
 
     try std.testing.expect(std.mem.indexOf(u8, contents, "str_key=hello") != null);
@@ -536,7 +544,7 @@ test "RotatingFileHandler write buffering" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -572,9 +580,11 @@ test "RotatingFileHandler write buffering" {
     try handler.flush(0);
 
     const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var read_buf: [8192]u8 = undefined;
-    const bytes_read = try file.readAll(&read_buf);
+    var file_rbuf: [8192]u8 = undefined;
+    var file_reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &file_rbuf);
+    const bytes_read = file_reader.interface.readSliceShort(&read_buf) catch 0;
     const contents = read_buf[0..bytes_read];
 
     // Count newlines to verify all 10 records were written
@@ -591,7 +601,7 @@ test "RotatingFileHandler multiple writes track size" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -634,7 +644,7 @@ test "RotatingFileHandler level filtering" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -671,7 +681,7 @@ test "RotatingFileHandler deinit closes file" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -697,7 +707,7 @@ test "RotatingFileHandler message newline sanitization" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -728,9 +738,11 @@ test "RotatingFileHandler message newline sanitization" {
     try handler.flush(0);
 
     const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var read_buf: [4096]u8 = undefined;
-    const bytes_read = try file.readAll(&read_buf);
+    var file_rbuf: [4096]u8 = undefined;
+    var file_reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &file_rbuf);
+    const bytes_read = file_reader.interface.readSliceShort(&read_buf) catch 0;
     const contents = read_buf[0..bytes_read];
 
     // Newline in message should be escaped as \n, not a raw newline
@@ -749,7 +761,7 @@ test "RotatingFileHandler auto-redacts sensitive key" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -783,9 +795,11 @@ test "RotatingFileHandler auto-redacts sensitive key" {
     try handler.flush(0);
 
     const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var read_buf: [4096]u8 = undefined;
-    const bytes_read = try file.readAll(&read_buf);
+    var file_rbuf: [4096]u8 = undefined;
+    var file_reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &file_rbuf);
+    const bytes_read = file_reader.interface.readSliceShort(&read_buf) catch 0;
     const contents = read_buf[0..bytes_read];
 
     // "password" key should be auto-redacted
@@ -796,13 +810,37 @@ test "RotatingFileHandler auto-redacts sensitive key" {
     // Deliberate fail removed -- test verified as running via handler_test.zig
 }
 
+test "log file is created owner-only (0o600)" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = ".zig-cache/tmp/sec0034-perm-test.log";
+    // Fresh file required: createFile does not chmod existing files.
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var ctx = try Context.init(
+        std.testing.allocator,
+        .{ .path = path },
+        .info,
+        Clock.system(),
+    );
+    defer ctx.deinit();
+
+    const st = try ctx.file.?.stat(io);
+    // No group/other bits.
+    try std.testing.expectEqual(
+        @as(std.posix.mode_t, 0),
+        st.permissions.toMode() & 0o077,
+    );
+}
+
 test "RotatingFileHandler close via vtable" {
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp_dir.sub_path});
     defer allocator.free(path);
 
     var full_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;

@@ -429,4 +429,7 @@ test {
     // tests actually run as part of the unit test suite (PERF-040).
     _ = queue;
     _ = async_handler;
+    // Reference the rotating file handler so its in-file tests (including
+    // the SEC-0034/SEC-0037 regression tests) run in the unit test suite.
+    _ = rotating_file;
 }
