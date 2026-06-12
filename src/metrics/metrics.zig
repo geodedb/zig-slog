@@ -52,6 +52,8 @@ pub const Metrics = struct {
     rotations_total: PaddedCounter = .{},
     /// Number of network reconnections.
     reconnections_total: PaddedCounter = .{},
+    /// Number of records truncated due to format buffer overflow (SEC-0039).
+    records_truncated_total: PaddedCounter = .{},
 
     /// Increment logs emitted counter.
     pub fn incEmitted(self: *Metrics) void {
@@ -88,6 +90,11 @@ pub const Metrics = struct {
         _ = self.reconnections_total.value.fetchAdd(1, .monotonic);
     }
 
+    /// Increment truncated records counter.
+    pub fn incTruncated(self: *Metrics) void {
+        _ = self.records_truncated_total.value.fetchAdd(1, .monotonic);
+    }
+
     /// Get current values.
     pub fn snapshot(self: *const Metrics) MetricsSnapshot {
         return .{
@@ -98,6 +105,7 @@ pub const Metrics = struct {
             .queue_size = self.queue_size.value.load(.monotonic),
             .rotations_total = self.rotations_total.value.load(.monotonic),
             .reconnections_total = self.reconnections_total.value.load(.monotonic),
+            .records_truncated_total = self.records_truncated_total.value.load(.monotonic),
         };
     }
 
@@ -129,6 +137,9 @@ pub const Metrics = struct {
             \\# HELP slogz_reconnections_total Total network reconnections.
             \\# TYPE slogz_reconnections_total counter
             \\slogz_reconnections_total {d}
+            \\# HELP slogz_records_truncated_total Total records truncated due to format buffer overflow.
+            \\# TYPE slogz_records_truncated_total counter
+            \\slogz_records_truncated_total {d}
             \\
         , .{
             snap.logs_emitted_total,
@@ -138,6 +149,7 @@ pub const Metrics = struct {
             snap.queue_size,
             snap.rotations_total,
             snap.reconnections_total,
+            snap.records_truncated_total,
         }) catch {};
 
         return fbs.buffered();
@@ -153,6 +165,7 @@ pub const MetricsSnapshot = struct {
     queue_size: CounterType,
     rotations_total: CounterType,
     reconnections_total: CounterType,
+    records_truncated_total: CounterType,
 };
 
 test "Metrics basic operations" {
@@ -180,6 +193,7 @@ test "Metrics.renderPrometheus" {
 
     try std.testing.expect(std.mem.indexOf(u8, output, "slogz_logs_emitted_total 3") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "slogz_logs_dropped_total 0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "slogz_records_truncated_total 0") != null);
 }
 
 test "Metrics counters are cache-line aligned to prevent false sharing" {

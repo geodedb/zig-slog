@@ -50,9 +50,23 @@ fn handle(ctx_ptr: *anyopaque, rec: *const Record) HandlerError!void {
     var buf: [8192]u8 = undefined;
     var fbs: std.Io.Writer = .fixed(&buf);
 
-    writeTextRecord(&fbs, rec, ctx.prefix) catch return error.WriteFailed;
+    // SEC-0039: a record can be up to record.MAX_RECORD_SIZE (64KB) but
+    // the format buffer is 8KB. On overflow, emit what fit plus an
+    // explicit truncation marker instead of silently dropping the record.
+    var truncated = false;
+    writeTextRecord(&fbs, rec, ctx.prefix) catch {
+        truncated = true;
+    };
 
-    const output = fbs.buffered();
+    var output: []const u8 = fbs.buffered();
+    if (truncated) {
+        const marker = " [TRUNCATED]\n";
+        const keep = @min(output.len, buf.len - marker.len);
+        @memcpy(buf[keep..][0..marker.len], marker);
+        output = buf[0 .. keep + marker.len];
+        metrics.global.incTruncated();
+    }
+
     ctx.writer.writeAll(output) catch return error.WriteFailed;
     metrics.global.addBytesWritten(output.len);
 }

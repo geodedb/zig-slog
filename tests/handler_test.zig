@@ -226,6 +226,37 @@ test "TextHandler - special float values" {
     try std.testing.expect(std.mem.indexOf(u8, output, "inf=null") != null);
 }
 
+test "oversized record is truncated with marker, not dropped" {
+    var out_buf: [16384]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&out_buf);
+    var ctx = slogz.text.Context.init(&writer, .info, Clock.system());
+    const handler = slogz.text.init(&ctx);
+
+    // A record up to MAX_RECORD_SIZE (64KB) is admitted, but the text
+    // handler renders into an 8KB buffer. SEC-0039: it must truncate
+    // with an explicit marker rather than silently drop the record.
+    const big = "x" ** 10000;
+    const rec = Record{
+        .time_utc_us = 0,
+        .level = .info,
+        .msg_id = "test",
+        .message = "oversized test",
+        .logger = "",
+        .source_file = "",
+        .source_line = 0,
+        .attrs = &.{
+            Attr.string("big", big),
+        },
+    };
+
+    try handler.handle(&rec);
+
+    const out = writer.buffered();
+    try std.testing.expect(out.len > 0); // NOT silently dropped
+    try std.testing.expect(std.mem.indexOf(u8, out, "[TRUNCATED]") != null);
+    try std.testing.expectEqual(@as(u8, '\n'), out[out.len - 1]);
+}
+
 test "TextHandler - dynamic level change" {
     var buf: [1024]u8 = undefined;
     var fbs: std.Io.Writer = .fixed(&buf);
