@@ -28,6 +28,7 @@ pub fn main() !void {
         .drop_oldest = true,
     });
     defer async_ctx.deinit();
+    try async_ctx.start(); // spawn the worker thread (two-step init)
 
     const handler = slog.async_handler.init(&async_ctx);
     const logger = slog.Logger.init(handler, .info, slog.Clock.system())
