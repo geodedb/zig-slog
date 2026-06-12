@@ -73,26 +73,20 @@ const min_pattern_len = blk: {
 /// For example, `isSensitiveKey("x_api_key_v2")` returns true because
 /// it contains "api_key".
 ///
-/// Implementation note: uses a single-pass scan with comptime-unrolled
-/// pattern matching for efficient fixed-length comparisons.
+/// Implementation note: uses a single-pass, case-insensitive scan over the
+/// full key (no scratch buffer) with comptime-unrolled pattern matching for
+/// efficient fixed-length comparisons.
 pub fn isSensitiveKey(key: []const u8) bool {
     if (key.len < min_pattern_len) return false;
 
-    var lower_buf: [64]u8 = undefined;
-    const lower_len = @min(key.len, lower_buf.len);
-    for (key[0..lower_len], 0..) |c, i| {
-        lower_buf[i] = std.ascii.toLower(c);
-    }
-    const lower = lower_buf[0..lower_len];
-
-    // Single-pass scan: at each position, check all patterns via inline for.
-    // The compiler unrolls each pattern check at comptime, enabling optimized
-    // fixed-length comparisons.
-    for (0..lower.len) |pos| {
-        const remaining = lower.len - pos;
+    // Single-pass scan over the FULL key (SEC-0038: no 64-byte cap).
+    // Case-insensitive compare per pattern; the inline for unrolls each
+    // pattern check at comptime. Patterns are lowercase ASCII.
+    for (0..key.len) |pos| {
+        const remaining = key.len - pos;
         inline for (sensitive_keys) |pattern| {
             if (remaining >= pattern.len and
-                std.mem.eql(u8, lower[pos..][0..pattern.len], pattern))
+                std.ascii.eqlIgnoreCase(key[pos..][0..pattern.len], pattern))
             {
                 return true;
             }
@@ -151,6 +145,16 @@ test "isSensitiveKey expanded patterns" {
     try std.testing.expect(!isSensitiveKey("hostname"));
     try std.testing.expect(!isSensitiveKey("port"));
     try std.testing.expect(!isSensitiveKey("method"));
+}
+
+test "isSensitiveKey matches patterns past 64 bytes" {
+    const long_key = "a" ** 64 ++ "password";
+    try std.testing.expect(isSensitiveKey(long_key));
+}
+
+test "isSensitiveKey long benign key is not redacted" {
+    const long_benign = "b" ** 100;
+    try std.testing.expect(!isSensitiveKey(long_benign));
 }
 
 test "redact" {
