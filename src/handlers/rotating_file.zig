@@ -116,23 +116,45 @@ pub const Context = struct {
             };
         }
 
-        self.file = std.Io.Dir.cwd().createFile(io, path, .{
-            .truncate = false,
-            // SEC-0034: owner-only. Log files may contain PII/secrets;
-            // default_file (0o666 & ~umask) is world-readable. Note:
-            // createFile does not change the mode of an existing file.
-            .permissions = .fromMode(0o600),
-            // SEC-0037: keep relative paths (and any symlinks in them)
-            // beneath the cwd sandbox. Maps to RESOLVE_BENEATH on
-            // Linux 5.6+; silently unsupported elsewhere. Absolute
-            // paths are operator-opt-in and exempt by definition.
-            .resolve_beneath = !std.fs.path.isAbsolute(path),
-        }) catch |err| {
-            return switch (err) {
-                error.AccessDenied => error.WriteFailed,
-                else => error.WriteFailed,
+        // SEC-0037: guard the final path component against symlinks on
+        // all platforms. Open an existing file with O_NOFOLLOW (a symlink
+        // fails the open with ELOOP/error.SymLinkLoop); if absent, create
+        // with O_CREAT|O_EXCL (which never follows a final-component
+        // symlink, even a dangling one). Retry the open on a create race.
+        // resolve_beneath additionally sandboxes the whole resolution
+        // where the OS supports it (O_RESOLVE_BENEATH on FreeBSD/Darwin);
+        // on Linux the Zig 0.16 backend does not map it (openat2 is not
+        // used), so intermediate symlinked directories remain a
+        // documented residual risk for relative paths -- the final
+        // component is guarded everywhere. Absolute paths are
+        // operator-opt-in and exempt from the sandbox by definition.
+        const sandbox = !std.fs.path.isAbsolute(path);
+        var attempts: u8 = 0;
+        self.file = while (attempts < 3) : (attempts += 1) {
+            if (std.Io.Dir.cwd().openFile(io, path, .{
+                .mode = .write_only,
+                .follow_symlinks = false,
+                .resolve_beneath = sandbox,
+            })) |f| {
+                break f;
+            } else |open_err| switch (open_err) {
+                error.FileNotFound => {},
+                else => return error.WriteFailed,
+            }
+            const created = std.Io.Dir.cwd().createFile(io, path, .{
+                .truncate = false,
+                .exclusive = true,
+                // SEC-0034: owner-only. Log files may contain
+                // PII/secrets; default_file (0o666 & ~umask) is
+                // world-readable.
+                .permissions = .fromMode(0o600),
+                .resolve_beneath = sandbox,
+            }) catch |create_err| switch (create_err) {
+                error.PathAlreadyExists => continue, // create race: retry open
+                else => return error.WriteFailed,
             };
-        };
+            break created;
+        } else return error.WriteFailed;
 
         // Reset write buffer position for the new file
         self.write_buf_pos = 0;
@@ -872,15 +894,41 @@ test "absolute log path allowed with explicit opt-in" {
     ctx.deinit();
 }
 
-test "symlink escaping the sandbox is rejected" {
-    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+test "symlink at the log path is rejected (final component guard)" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const io = std.Io.Threaded.global_single_threaded.io();
+    // Writable out-of-sandbox target: if the guard fails, the open would
+    // succeed and write through the symlink.
+    const target = "/tmp/sec0037-writable-target.txt";
+    {
+        const tf = try std.Io.Dir.cwd().createFile(io, target, .{ .truncate = true });
+        tf.close(io);
+    }
+    defer std.Io.Dir.cwd().deleteFile(io, target) catch {};
+
     const link_path = ".zig-cache/tmp/sec0037-escape-link.log";
     std.Io.Dir.cwd().createDirPath(io, ".zig-cache/tmp") catch {};
     std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
     defer std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
-    // Symlink inside the sandbox pointing outside it.
-    try std.Io.Dir.cwd().symLink(io, "/etc/hostname", link_path, .{});
+    try std.Io.Dir.cwd().symLink(io, target, link_path, .{});
+
+    const result = Context.init(
+        std.testing.allocator,
+        .{ .path = link_path },
+        .info,
+        Clock.system(),
+    );
+    try std.testing.expectError(error.WriteFailed, result);
+}
+
+test "dangling symlink at the log path is rejected" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const link_path = ".zig-cache/tmp/sec0037-dangling-link.log";
+    std.Io.Dir.cwd().createDirPath(io, ".zig-cache/tmp") catch {};
+    std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, link_path) catch {};
+    try std.Io.Dir.cwd().symLink(io, "/nonexistent/sec0037-target", link_path, .{});
 
     const result = Context.init(
         std.testing.allocator,
