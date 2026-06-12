@@ -290,25 +290,33 @@ pub fn BoundedQueue(comptime T: type) type {
             allocator.free(self.buffer);
         }
 
+        pub const PushResult = struct {
+            /// Queue length after the push.
+            len: usize,
+            /// True if this push evicted the oldest item.
+            dropped: bool,
+        };
+
         /// Push item, dropping oldest if full.
-        /// Returns the queue length after the push, allowing callers to
-        /// avoid a separate `len()` call (which would re-acquire the mutex).
-        pub fn pushDropOldest(self: *Self, item: T) usize {
+        /// Returns post-push length and whether an item was evicted, so
+        /// callers need no separate len()/droppedCount() mutex trips.
+        pub fn pushDropOldest(self: *Self, item: T) PushResult {
             self.mutex.lockUncancelable(io());
             defer self.mutex.unlock(io());
 
+            var dropped = false;
             if (self.count == self.buffer.len) {
-                // Drop oldest
                 self.head = (self.head + 1) % self.buffer.len;
                 self.count -= 1;
                 self.dropped += 1;
+                dropped = true;
             }
 
             self.buffer[self.tail] = item;
             self.tail = (self.tail + 1) % self.buffer.len;
             self.count += 1;
             self.not_empty.signal(io());
-            return self.count;
+            return .{ .len = self.count, .dropped = dropped };
         }
 
         /// Push item, blocking if full (with timeout).
@@ -502,6 +510,23 @@ test "BoundedQueue drop oldest" {
     try std.testing.expectEqual(@as(usize, 1), queue.droppedCount());
     try std.testing.expectEqual(@as(u32, 2), queue.tryPop().?);
     try std.testing.expectEqual(@as(u32, 3), queue.tryPop().?);
+}
+
+test "pushDropOldest reports drop and length in one call" {
+    var queue = try BoundedQueue(u32).init(std.testing.allocator, 2);
+    defer queue.deinit(std.testing.allocator);
+
+    var r = queue.pushDropOldest(1);
+    try std.testing.expectEqual(@as(usize, 1), r.len);
+    try std.testing.expect(!r.dropped);
+
+    r = queue.pushDropOldest(2);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expect(!r.dropped);
+
+    r = queue.pushDropOldest(3); // capacity 2: drops oldest
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expect(r.dropped);
 }
 
 test "BoundedQueue popWait returns items and null after shutdownWake" {

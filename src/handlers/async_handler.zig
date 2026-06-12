@@ -148,20 +148,13 @@ pub const Context = struct {
         const qr = QueuedRecord.fromRecord(rec);
 
         if (self.drop_oldest) {
-            // Snapshot the dropped count before pushing so we can detect
-            // if the queue itself dropped an item during this push.
-            const before = self.queue.droppedCount();
-
-            // pushDropOldest returns the queue length after the push,
-            // eliminating the need for a separate len() call.
-            const queue_len = self.queue.pushDropOldest(qr);
-
-            const after = self.queue.droppedCount();
-            if (after > before) {
-                metrics.global.incDropped(after - before);
+            // Single locked operation: pushDropOldest reports both the
+            // post-push length and whether it evicted an item (PERF-041).
+            const result = self.queue.pushDropOldest(qr);
+            if (result.dropped) {
+                metrics.global.incDropped(1);
             }
-
-            metrics.global.setQueueSize(queue_len);
+            metrics.global.setQueueSize(result.len);
         } else {
             // Blocking mode
             self.queue.pushBlocking(qr, self.block_timeout_ms) catch |err| {
