@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TLS/HTTPS support for HTTP sink
 - Log sampling and rate limiting
 
+## [0.1.11] - 2026-06-12
+
 ### Fixed
 - Compare-bench regression gate restored under Zig 0.16 (PERF-043)
 - Multi-handler fan-out dispatches sequentially without per-record overhead, fixing a ~200x regression (PERF-039)
