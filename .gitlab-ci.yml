@@ -6,8 +6,10 @@ default:
   tags:
     # company alone also matches the Hosted Windows Runners, which parse
     # these bash scripts with PowerShell and fail; require linux too.
+    # dedicated pins jobs to the OVH Dedicated Runners pool.
     - company
     - linux
+    - dedicated
 
 include:
   # Security scanning
