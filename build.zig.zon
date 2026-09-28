@@ -13,12 +13,12 @@
     },
     .dependencies = .{
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.15#2f75b5d1d42fd179398b0f81491f8e211a888c5e",
-            .hash = "json-0.1.15-tOue4XXRDwDiwJ1Edhk5QstM23dtV_5itFSX1ln2qTrQ",
+            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.18#807796bd4ba269870393ef9cad51047ad800ea8f",
+            .hash = "json-0.1.18-tOue4dEGEQBouX4qMZ_VpSZYhnOrprvUOpSF8G4sv27O",
         },
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.7#54a2ddda1a356c32ba2e4df70691459570fb6339",
-            .hash = "thread_pool-0.2.7-11B1BvRneQBnMkDnRbKd76THvZn4ZhDhmlWQw-aziWQm",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.8#2161d8e77beb6f9d6d8664b4406c739ef3a6cc81",
+            .hash = "thread_pool-0.2.8-11B1BrrSeQD3WHNJ-oyNkrfcHLp5AOW1Zgr4QTGu7pb4",
         },
     },
 }
