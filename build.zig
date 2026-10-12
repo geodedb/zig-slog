@@ -59,6 +59,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "feature_windows_eventlog", feature_windows_eventlog);
     build_options.addOption([]const u8, "package_name", "slog");
     build_options.addOption(bool, "with_otel", with_otel);
+    build_options.addOption(bool, "enable_tp", enable_tp);
     // Shared `build_options` module - every artifact that imports
     // `slogz` AND needs `build_options` (the slogz module itself, the
     // observability seam reached through it, the observability tests)

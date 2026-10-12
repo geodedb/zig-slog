@@ -9,29 +9,47 @@ default:
     # dedicated pins jobs to the OVH Dedicated Runners pool.
     - company
     - linux
+    - x86
     - dedicated
 
 include:
   # Security scanning
-  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.55.6
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.55.6
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.55.6
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.55.6
+  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
 
   # Code quality
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.55.6
+  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
 
   # SBOM
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.55.6
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.55.6
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
 
   # Release
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.55.6
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.55.8
     inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
       # Create the GitLab Release with CI_JOB_TOKEN: the group GITLAB_TOKEN
       # lacks api scope, so the default glab path fails with 403 (SONNY-2447).
       release_auth: job_token
-  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.55.6
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.55.8
+    inputs:
+      tags: ["company", "linux", "dedicated", "x86"]
 
 variables:
   ZIG_VERSION: "0.16.0"
@@ -192,3 +210,38 @@ bench-regression:
   allow_failure: true
   needs:
     - build
+
+# SONNY-4778: tools must not redirect Git operations into this worktree.
+hook-env-regression:
+  stage: lint
+  image: python:3.14-slim-bookworm
+  tags: [company, linux, x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+  script:
+    - python3 scripts/test_hook_env.py
+
+test-source-package:
+  stage: test
+  image: debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+  tags: [company, linux, x86]
+  before_script:
+    - *install-zig
+    - apt-get install -y --no-install-recommends git
+  script:
+    - python3 scripts/check_source_package.py --jobs 2
+  needs:
+    - build
+  allow_failure: false
+
+# The core API and shutdown must remain usable with the thread pool disabled.
+test-no-thread-pool:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - zig build test -Denable_tp=false --summary all
+  needs:
+    - build
+  allow_failure: false

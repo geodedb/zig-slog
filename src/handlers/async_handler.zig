@@ -56,6 +56,9 @@ pub const Context = struct {
     block_timeout_ms: u32,
     level: std.atomic.Value(i32),
     thread: ?std.Thread,
+    // Includes queued records and the record currently being delivered.
+    pending: std.atomic.Value(usize) = .init(0),
+    inner_mutex: std.Io.Mutex = .init,
 
     /// Initialize the async handler context. Does NOT start the background
     /// worker thread. Call `start()` after the Context has a stable address.
@@ -120,6 +123,7 @@ pub const Context = struct {
 
     /// Reconstruct a Record from QueuedRecord and deliver to inner handler.
     fn processQueuedRecord(ctx: *Context, qr: QueuedRecord) void {
+        defer _ = ctx.pending.fetchSub(1, .acq_rel);
         if (!qr.valid) return;
 
         var attr_buf: [MAX_STORED_ATTRS]Attr = undefined;
@@ -136,6 +140,9 @@ pub const Context = struct {
             .attrs = attrs,
         };
 
+        const io = std.Io.Threaded.global_single_threaded.io();
+        ctx.inner_mutex.lockUncancelable(io);
+        defer ctx.inner_mutex.unlock(io);
         ctx.inner.handle(&rec) catch {
             metrics.global.incErrors();
         };
@@ -146,18 +153,23 @@ pub const Context = struct {
     /// locking is needed. Drop tracking uses the queue's own dropped counter.
     pub fn enqueue(self: *Context, rec: *const Record) !void {
         const qr = QueuedRecord.fromRecord(rec);
+        // Register before publishing to the queue so dequeue cannot expose
+        // a zero count while the worker still owns a record.
+        _ = self.pending.fetchAdd(1, .acq_rel);
 
         if (self.drop_oldest) {
             // Single locked operation: pushDropOldest reports both the
             // post-push length and whether it evicted an item (PERF-041).
             const result = self.queue.pushDropOldest(qr);
             if (result.dropped) {
+                _ = self.pending.fetchSub(1, .acq_rel);
                 metrics.global.incDropped(1);
             }
             metrics.global.setQueueSize(result.len);
         } else {
             // Blocking mode
             self.queue.pushBlocking(qr, self.block_timeout_ms) catch |err| {
+                _ = self.pending.fetchSub(1, .acq_rel);
                 switch (err) {
                     error.Timeout, error.QueueFull => {
                         metrics.global.incDropped(1);
@@ -210,21 +222,30 @@ fn setLevel(ctx_ptr: *anyopaque, level: Level) void {
     ctx.level.store(@intFromEnum(level), .release);
 }
 
-/// Flush waits for the queue to drain (waitEmpty's timed 1ms poll loop,
-/// see PERF-042), then flushes the inner handler.
+/// Wait for queued and in-flight delivery before flushing the inner handler.
+/// A zero timeout retains the existing 5-second default delivery budget.
 fn flush(ctx_ptr: *anyopaque, timeout_ms: u32) HandlerError!void {
     const ctx: *Context = @ptrCast(@alignCast(ctx_ptr));
-
-    // Wait for queue to drain using the timed waitEmpty.
-    // If timeout_ms is 0, we still try a brief wait to allow in-flight items
-    // to be processed.
+    const io = std.Io.Threaded.global_single_threaded.io();
     const wait_ms = if (timeout_ms == 0) 5000 else timeout_ms;
-    if (!ctx.queue.waitEmpty(wait_ms)) {
-        if (timeout_ms > 0) return error.Timeout;
-    }
+    const deadline = std.Io.Timestamp.now(io, .awake).nanoseconds +
+        @as(i96, @intCast(@as(u64, wait_ms) * std.time.ns_per_ms));
 
-    // Flush inner handler
-    try ctx.inner.flush(timeout_ms);
+    while (true) {
+        if (ctx.pending.load(.acquire) == 0 and ctx.inner_mutex.tryLock()) {
+            // A producer may have enqueued while we acquired the lock. A
+            // worker cannot touch the inner handler concurrently with flush.
+            if (ctx.pending.load(.acquire) == 0) {
+                defer ctx.inner_mutex.unlock(io);
+                try ctx.inner.flush(timeout_ms);
+                return;
+            }
+            ctx.inner_mutex.unlock(io);
+        }
+        if (std.Io.Timestamp.now(io, .awake).nanoseconds >= deadline) return error.Timeout;
+        // Zig 0.16 has no timed condition wait; retain the bounded 1ms poll.
+        io.sleep(std.Io.Duration.fromMilliseconds(1), .awake) catch {};
+    }
 }
 
 fn close(ctx_ptr: *anyopaque) void {
@@ -426,4 +447,83 @@ test "AsyncHandler redacts secrets in async output" {
     try std.testing.expect(std.mem.indexOf(u8, output, "api_key=[REDACTED]") != null);
     // Non-secret attrs should still be present
     try std.testing.expect(std.mem.indexOf(u8, output, "user=admin") != null);
+}
+
+test "AsyncHandler flush waits for dequeued delivery and accounts for queue policy" {
+    const BlockingInner = struct {
+        entered: std.atomic.Value(bool) = .init(false),
+        release: std.atomic.Value(bool) = .init(false),
+        handled: std.atomic.Value(usize) = .init(0),
+        flushed: std.atomic.Value(usize) = .init(0),
+
+        fn handleRecord(ptr: *anyopaque, _: *const Record) HandlerError!void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.entered.store(true, .release);
+            const io = std.Io.Threaded.global_single_threaded.io();
+            while (!self.release.load(.acquire)) {
+                io.sleep(std.Io.Duration.fromMilliseconds(1), .awake) catch {};
+            }
+            _ = self.handled.fetchAdd(1, .release);
+        }
+
+        fn flushRecords(ptr: *anyopaque, _: u32) HandlerError!void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            _ = self.flushed.fetchAdd(1, .release);
+        }
+    };
+    const blocking_vtable = HandlerVTable{
+        .handle = BlockingInner.handleRecord,
+        .flush = BlockingInner.flushRecords,
+        .withAttrs = undefined,
+        .withGroup = undefined,
+        .setLevel = undefined,
+    };
+
+    inline for (.{ true, false }) |drop_oldest| {
+        var inner: BlockingInner = .{};
+        var ctx = try Context.init(std.testing.allocator, .{
+            .inner = .{ .ctx = &inner, .vtable = &blocking_vtable },
+            .queue_size = 1,
+            .drop_oldest = drop_oldest,
+        });
+        try ctx.start();
+        defer ctx.deinit();
+        // Unblock the worker before join, including on an assertion failure.
+        defer inner.release.store(true, .release);
+        const handler = init(&ctx);
+        const record = Record{
+            .time_utc_us = 0,
+            .level = .info,
+            .msg_id = "flush-regression",
+            .message = "must be delivered",
+            .logger = "test",
+            .source_file = "",
+            .source_line = 0,
+            .attrs = &.{},
+        };
+        try handler.handle(&record);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const deadline = std.Io.Timestamp.now(io, .awake).nanoseconds + 5 * std.time.ns_per_s;
+        while (!inner.entered.load(.acquire)) {
+            if (std.Io.Timestamp.now(io, .awake).nanoseconds >= deadline) return error.Timeout;
+            io.sleep(std.Io.Duration.fromMilliseconds(1), .awake) catch {};
+        }
+        try std.testing.expectEqual(@as(usize, 0), ctx.queue.len());
+        try std.testing.expectError(error.Timeout, handler.flush(10));
+        try std.testing.expectEqual(@as(usize, 0), inner.flushed.load(.acquire));
+
+        // A dropped record and a rejected enqueue must each cease to count
+        // toward the flush barrier; neither may make a later flush hang.
+        try handler.handle(&record);
+        if (drop_oldest) {
+            try handler.handle(&record);
+            try std.testing.expectEqual(@as(usize, 1), ctx.droppedCount());
+        } else {
+            try std.testing.expectError(error.BufferFull, handler.handle(&record));
+        }
+        inner.release.store(true, .release);
+        try handler.flush(5000);
+        try std.testing.expectEqual(@as(usize, 2), inner.handled.load(.acquire));
+        try std.testing.expectEqual(@as(usize, 1), inner.flushed.load(.acquire));
+    }
 }

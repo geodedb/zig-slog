@@ -89,7 +89,7 @@ pub const windows_eventlog = @import("handlers/windows_eventlog.zig");
 pub const multi_handler = @import("handlers/multi_handler.zig");
 
 // Parallelism
-pub const parallel = @import("parallel.zig");
+pub const parallel = if (@import("build_options").enable_tp) @import("parallel.zig") else struct {};
 
 /// otel observability seam. When `-Dwith_otel=false` (the default), every
 /// function in this namespace collapses to a comptime no-op and no otel
@@ -206,7 +206,7 @@ pub fn exportPrometheusMetrics(buf: []u8) []const u8 {
 /// (if enabled and initialized). Call this during application shutdown
 /// after all loggers and handlers have been closed.
 pub fn deinit() void {
-    parallel.deinitPool();
+    if (@import("build_options").enable_tp) parallel.deinitPool();
 }
 
 test "slogz basic usage" {
@@ -380,6 +380,13 @@ test "slogz discard handler" {
 }
 
 test "parallel re-export is reachable" {
+    if (!@import("build_options").enable_tp) {
+        // Core shutdown remains valid without any thread-pool dependency.
+        deinit();
+        try std.testing.expect(!@hasDecl(parallel, "parallelRecordFormat"));
+        return;
+    }
+
     // Smoke test: verify parallel.zig is reachable through the public
     // slogz root module and parallelRecordFormat dispatches end-to-end
     // against a trivial formatter. Use 8 records to cross the parallel
