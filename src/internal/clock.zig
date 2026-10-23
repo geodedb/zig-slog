@@ -62,13 +62,9 @@ pub fn setFixedTimestamp(timestamp_us: i128) void {
 }
 
 fn systemNowUtcMicros() i128 {
-    const ns = blk: {
-        var ts: std.os.linux.timespec = undefined;
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) break :blk @as(i128, 0);
-        break :blk @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
-    };
-    return @divFloor(ns, 1000);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ns = std.Io.Clock.real.now(io).nanoseconds;
+    return @divFloor(@as(i128, ns), std.time.ns_per_us);
 }
 
 /// Parses ISO8601 timestamp to microseconds since epoch.

@@ -27,3 +27,5 @@ zig-pkg/
 
 # Local git worktrees (per-feature isolated checkouts)
 .worktrees/
+.zig-global/
+zig-[0-9]*/

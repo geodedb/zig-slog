@@ -103,11 +103,7 @@ pub const Context = struct {
 
     fn writeWithRetry(self: *Context, data: []const u8) !void {
         // Circuit breaker: fast-fail during cooldown period
-        const now = blk: {
-            var ts: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-            break :blk if (rc == 0) @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000) else 0;
-        };
+        const now = std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toMilliseconds();
         if (self.consecutive_failures >= circuit_breaker_threshold and now < self.circuit_open_until) {
             return error.WriteFailed;
         }
@@ -161,11 +157,7 @@ pub const Context = struct {
 
         self.consecutive_failures += 1;
         if (self.consecutive_failures >= circuit_breaker_threshold) {
-            self.circuit_open_until = blk: {
-                var ts: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-                break :blk if (rc == 0) @as(i64, ts.sec) * 1000 + @divFloor(@as(i64, ts.nsec), 1_000_000) else 0;
-            } + circuit_cooldown_ms;
+            self.circuit_open_until = std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toMilliseconds() + circuit_cooldown_ms;
         }
         return error.WriteFailed;
     }
