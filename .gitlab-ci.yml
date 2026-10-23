@@ -15,45 +15,51 @@ default:
 
 include:
   # Security scanning
-  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.57.1
-    inputs:
-      tags: ["company", "linux", "dedicated", "x86"]
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.57.1
-    inputs:
-      tags: ["company", "linux", "dedicated", "x86"]
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.57.1
-    inputs:
-      tags: ["company", "linux", "dedicated", "x86"]
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.57.1
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@aad997d40e358eeef7ec943f761498341c37c724
     inputs:
       tags: ["company", "linux", "dedicated", "x86"]
 
   # Code quality
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.57.1
+  - component: gitlab.com/devnw/ci-catalog/zig-format@aad997d40e358eeef7ec943f761498341c37c724
     inputs:
       tags: ["company", "linux", "dedicated", "x86"]
 
   # SBOM
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.57.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@aad997d40e358eeef7ec943f761498341c37c724
     inputs:
       tags: ["company", "linux", "dedicated", "x86"]
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.57.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@aad997d40e358eeef7ec943f761498341c37c724
     inputs:
       tags: ["company", "linux", "dedicated", "x86"]
 
   # Release
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.57.1
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@aad997d40e358eeef7ec943f761498341c37c724
     inputs:
       tags: ["company", "linux", "dedicated", "x86"]
       # Create the GitLab Release with CI_JOB_TOKEN: the group GITLAB_TOKEN
       # lacks api scope, so the default glab path fails with 403 (SONNY-2447).
       release_auth: job_token
-  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.57.1
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@aad997d40e358eeef7ec943f761498341c37c724
     inputs:
       tags: ["company", "linux", "dedicated", "x86"]
 
 variables:
   ZIG_VERSION: "0.16.0"
+  ZIG_CACHE_PLATFORM: "linux-x86_64"
+  ZIG_GLOBAL_CACHE_DIR: "$CI_PROJECT_DIR/.zig-global"
+
+# Only Zig jobs restore this cache. The build publishes Linux entries; the
+# small native clock job publishes its separate macOS entry.
+.zig-cache:
+  cache: &zig-cache
+    key: "slog-zig-v1-${ZIG_VERSION}-${ZIG_CACHE_PLATFORM}-${CI_COMMIT_REF_SLUG}"
+    fallback_keys:
+      - "slog-zig-v1-${ZIG_VERSION}-${ZIG_CACHE_PLATFORM}-${CI_DEFAULT_BRANCH}"
+    paths:
+      - .zig-cache/
+      - .zig-global/p/
+      - zig-${ZIG_VERSION}/
+    policy: pull
 
 stages:
   - lint
@@ -66,9 +72,19 @@ stages:
 
 # Zig installation template (SEC-R6-02: SHA-256 verified via ziglang.org index)
 .install-zig: &install-zig
-  - apt-get update && apt-get install -y curl xz-utils python3
   - |
-    if [ ! -f "zig-${ZIG_VERSION}/zig" ]; then
+    if ! { command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$ZIG_VERSION" ]; } && [ ! -x "zig-${ZIG_VERSION}/zig" ]; then
+      case "$(uname -s)" in
+        Linux)
+          ZIG_OS=linux
+          apt-get update && apt-get install -y --no-install-recommends curl xz-utils python3 ca-certificates
+          ;;
+        Darwin)
+          ZIG_OS=macos
+          command -v python3 >/dev/null || { echo "python3 is required to verify Zig"; exit 1; }
+          ;;
+        *) echo "Unsupported OS: $(uname -s)"; exit 1 ;;
+      esac
       ARCH=$(uname -m)
       case "$ARCH" in
         x86_64)  ZIG_ARCH="x86_64" ;;
@@ -79,14 +95,14 @@ stages:
       MAJOR=$(echo "$ZIG_VERSION" | cut -d. -f1)
       MINOR=$(echo "$ZIG_VERSION" | cut -d. -f2)
       if [ "$MAJOR" -eq 0 ] && [ "$MINOR" -lt 15 ]; then
-        ARCHIVE_NAME="zig-linux-${ZIG_ARCH}-${ZIG_VERSION}"
+        ARCHIVE_NAME="zig-${ZIG_OS}-${ZIG_ARCH}-${ZIG_VERSION}"
       else
-        ARCHIVE_NAME="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
+        ARCHIVE_NAME="zig-${ZIG_ARCH}-${ZIG_OS}-${ZIG_VERSION}"
       fi
       TARBALL="${ARCHIVE_NAME}.tar.xz"
       INDEX_FILE=$(mktemp)
       curl -fsSL "https://ziglang.org/download/index.json" -o "${INDEX_FILE}"
-      EXPECTED_HASH=$(ZIG_VER="${ZIG_VERSION}" ZIG_ARCH_KEY="${ZIG_ARCH}-linux" ZIG_IDX="${INDEX_FILE}" \
+      EXPECTED_HASH=$(ZIG_VER="${ZIG_VERSION}" ZIG_ARCH_KEY="${ZIG_ARCH}-${ZIG_OS}" ZIG_IDX="${INDEX_FILE}" \
         python3 -c "
     import json, os, sys
     idx = json.load(open(os.environ['ZIG_IDX']))
@@ -97,17 +113,20 @@ stages:
     ")
       rm -f "${INDEX_FILE}"
       curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}" -o "${TARBALL}"
-      echo "${EXPECTED_HASH}  ${TARBALL}" | sha256sum --check --strict
+      python3 -c 'import hashlib, pathlib, sys; actual = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest(); sys.exit(0 if actual == sys.argv[2] else "Zig SHA-256 mismatch")' "$TARBALL" "$EXPECTED_HASH"
       tar -xJf "${TARBALL}"
       mv "${ARCHIVE_NAME}" "zig-${ZIG_VERSION}"
       rm -f "${TARBALL}"
     fi
   - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
-  - zig version
+  - test "$(zig version)" = "$ZIG_VERSION"
 
 # Override zig-format component to use the project's ZIG_VERSION.
 # The v1.2.1 component defaults to 0.14.0 and does not accept a version input.
 zig-format:
+  variables:
+    ZIG_VERSION: "0.16.0"
+  cache: *zig-cache
   before_script:
     - *install-zig
 
@@ -115,6 +134,9 @@ zig-format:
 build:
   stage: build
   image: debian:bookworm-slim
+  cache:
+    <<: *zig-cache
+    policy: pull-push
   before_script:
     - *install-zig
   script:
@@ -124,6 +146,7 @@ build:
 test:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -135,6 +158,7 @@ test:
 test-release-safe:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -146,6 +170,7 @@ test-release-safe:
 test-release-fast:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -157,6 +182,7 @@ test-release-fast:
 test-release-small:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -174,6 +200,7 @@ test-release-small:
 fuzz:
   stage: fuzz
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -197,6 +224,7 @@ fuzz:
 bench-regression:
   stage: fuzz
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -226,9 +254,10 @@ test-source-package:
   stage: test
   image: debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
   tags: [company, linux, x86]
+  cache: *zig-cache
   before_script:
     - *install-zig
-    - apt-get install -y --no-install-recommends git
+    - apt-get update && apt-get install -y --no-install-recommends git python3
   script:
     - python3 scripts/check_source_package.py --jobs 2
   needs:
@@ -239,6 +268,7 @@ test-source-package:
 test-no-thread-pool:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -247,6 +277,23 @@ test-no-thread-pool:
     - build
   allow_failure: false
 
+# Exercise the system clock on Darwin before expensive consumer suites.
+# This has no external packages and catches accidental Linux syscalls.
+test-clock-macos:
+  stage: test
+  tags: [saas-macos-medium-m1]
+  timeout: 10m
+  variables:
+    ZIG_CACHE_PLATFORM: "macos-aarch64"
+  cache:
+    <<: *zig-cache
+    policy: pull-push
+  before_script:
+    - *install-zig
+  script:
+    - zig test src/internal/clock.zig
+  needs: []
+
 workflow:
   auto_cancel:
     on_new_commit: interruptible
@@ -254,6 +301,8 @@ workflow:
     - if: '$CI_COMMIT_TAG'
       auto_cancel:
         on_new_commit: none
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
     # SRE-194: validation pipelines fail fast on the first blocking job failure;
     # these rules admit only what the next rule already admits.
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
