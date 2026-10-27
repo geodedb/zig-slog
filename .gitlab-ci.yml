@@ -281,7 +281,7 @@ test-no-thread-pool:
 # This has no external packages and catches accidental Linux syscalls.
 test-clock-macos:
   stage: test
-  tags: [saas-macos-medium-m1]
+  tags: [dedicated, macos, arm]
   timeout: 10m
   variables:
     ZIG_CACHE_PLATFORM: "macos-aarch64"
@@ -296,6 +296,7 @@ test-clock-macos:
 
 workflow:
   auto_cancel:
+    on_job_failure: all
     on_new_commit: interruptible
   rules:
     - if: '$CI_COMMIT_TAG'
