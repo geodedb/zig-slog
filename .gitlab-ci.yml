@@ -73,6 +73,11 @@ stages:
 # Zig installation template (SEC-R6-02: SHA-256 verified via ziglang.org index)
 .install-zig: &install-zig
   - |
+    # A cached Zig skips the apt install below, but a cold dependency fetch
+    # still needs the CA bundle (else TlsInitializationFailed, SONNY-6650).
+    if [ "$(uname -s)" = Linux ] && [ ! -s /etc/ssl/certs/ca-certificates.crt ]; then
+      apt-get update && apt-get install -y --no-install-recommends ca-certificates
+    fi
     if ! { command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$ZIG_VERSION" ]; } && [ ! -x "zig-${ZIG_VERSION}/zig" ]; then
       case "$(uname -s)" in
         Linux)
